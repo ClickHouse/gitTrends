@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Missing term or repo_id' }, { status: 400 })
   }
   const database = process.env.CLICKHOUSE_DB
+  const table = process.env.CLICKHOUSE_TABLE ?? 'github_events'
   const dateFilter = SINCE_SQL[since] ?? SINCE_SQL['1M']
 
   const query = `
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
       toDayOfWeek(created_at) AS day_of_week,
       toHour(created_at)      AS hour,
       count()                 AS cnt
-    FROM ${database}.github_events_time_sort
+    FROM ${database}.${table}
     WHERE
       repo_id = {repo_id:String}
       AND event_type IN ('IssueCommentEvent', 'IssuesEvent')

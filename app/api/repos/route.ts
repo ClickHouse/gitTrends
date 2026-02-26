@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Missing term' }, { status: 400 })
   }
   const database = process.env.CLICKHOUSE_DB
+  const table = process.env.CLICKHOUSE_TABLE ?? 'github_events'
   const dateFilter = SINCE_SQL[since] ?? SINCE_SQL['1M']
 
   const query = `
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
       repo_name,
       dictGet(github.repo_name_to_id_dict, 'repo_id', cityHash64(repo_name)) AS repo_id,
       count() AS mentions
-    FROM ${database}.github_events_time_sort
+    FROM ${database}.${table}
     WHERE
       event_type IN (
         'IssueCommentEvent',
