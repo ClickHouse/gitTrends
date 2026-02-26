@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { clickhouse, toDisplaySql } from '@/lib/clickhouse'
+import { clickhouse, toDisplaySql, indexSettings, bloomBodyCondition, IndexMode } from '@/lib/clickhouse'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -13,16 +13,28 @@ const SINCE_SQL: Record<string, string> = {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const term     = searchParams.get('term')?.trim()
-  const useIndex = searchParams.get('useIndex') !== 'false'
-  const since    = searchParams.get('since') ?? '1M'
+  const term      = searchParams.get('term')?.trim()
+  const indexMode = (searchParams.get('indexMode') ?? 'fts') as IndexMode
+  const since     = searchParams.get('since') ?? '1M'
 
   if (!term) {
     return NextResponse.json({ error: 'Missing term' }, { status: 400 })
   }
-  const database = process.env.CLICKHOUSE_DB
-  const table = process.env.CLICKHOUSE_TABLE ?? 'github_events'
-  const dateFilter = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const mode        = searchParams.get('mode') ?? 'issues'
+  const op          = searchParams.get('op') ?? 'any'
+  const database    = process.env.CLICKHOUSE_DB
+  const table       = process.env.CLICKHOUSE_TABLE ?? 'github_events'
+  const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const eventFilter = mode === 'prs'
+    ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
+    : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
+  const bloom = bloomBodyCondition(term, op)
+  const bodyCondition = indexMode === 'full_scan'
+    ? `body ILIKE {pattern:String}`
+    : indexMode === 'bloom'
+    ? bloom.condition
+    : op === 'all' ? `hasAllTokens(body, {term:String})` : `hasAnyTokens(body, {term:String})`
+  const queryParams = indexMode === 'full_scan' ? { pattern: `%${term}%` } : indexMode === 'bloom' ? bloom.params : { term }
 
   const query = `
     SELECT
@@ -31,34 +43,28 @@ export async function GET(req: NextRequest) {
       count() AS mentions
     FROM ${database}.${table}
     WHERE
-      event_type IN (
-        'IssueCommentEvent',
-        'IssuesEvent'
-      )
-      AND hasAnyTokens(body, {term:String})
+      ${eventFilter}
+      AND ${bodyCondition}
       AND ${dateFilter}
     GROUP BY repo_name
     ORDER BY mentions DESC
     LIMIT 20
   `
 
-  const sql = toDisplaySql(query, { term }, useIndex)
+  const sql = toDisplaySql(query, indexMode === 'full_scan' ? { pattern: `%${term}%` } : indexMode === 'bloom' ? bloom.params : { term }, indexMode)
 
   try {
     const start = Date.now()
     const result = await clickhouse.query({
       query,
-      query_params: { term },
+      query_params: queryParams,
       format: 'JSONEachRow',
-      clickhouse_settings: {
-        query_plan_direct_read_from_text_index: useIndex ? 1 : 0,
-        use_skip_indexes_on_data_read: useIndex ? 1 : 0,
-      },
+      clickhouse_settings: indexSettings(indexMode),
     })
     const rows = await result.json<{ repo_name: string; repo_id: string; mentions: string }>()
     const elapsed = ((Date.now() - start) / 1000).toFixed(2)
 
-    return NextResponse.json({ rows, elapsed, useIndex, sql })
+    return NextResponse.json({ rows, elapsed, indexMode, sql })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message, sql }, { status: 500 })

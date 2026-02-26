@@ -29,8 +29,10 @@ type LoadState = 'idle' | 'loading' | 'done' | 'error'
 
 export default function Home() {
   const [term,     setTerm]     = useState('')
-  const [useIndex, setUseIndex] = useState(true)
+  const [indexMode, setIndexMode] = useState<'fts' | 'bloom' | 'full_scan'>('fts')
   const [since,    setSince]    = useState('1M')
+  const [mode,     setMode]     = useState<'issues' | 'prs'>('issues')
+  const [op,       setOp]       = useState<'any' | 'all'>('any')
 
   const [repos,        setRepos]        = useState<RepoRow[]>([])
   const [reposState,   setReposState]   = useState<LoadState>('idle')
@@ -59,10 +61,10 @@ export default function Home() {
 
   const buildParams = useCallback(
     (extra: Record<string, string> = {}) => {
-      const p = new URLSearchParams({ useIndex: String(useIndex), since, ...extra })
+      const p = new URLSearchParams({ indexMode, since, mode, op, ...extra })
       return p.toString()
     },
-    [useIndex, since]
+    [indexMode, since, mode, op]
   )
 
   const search = useCallback(
@@ -171,7 +173,7 @@ export default function Home() {
   useEffect(() => {
     if (repos.length > 0 || reposState === 'loading') search(term)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useIndex, since])
+  }, [indexMode, since, mode, op])
 
   return (
     <div className="h-screen flex flex-col bg-ch-dark text-white overflow-hidden">
@@ -189,30 +191,28 @@ export default function Home() {
           <span className="text-ch-muted text-sm hidden sm:block">· Full-Text Search Demo</span>
         </div>
 
-        {/* Scan mode toggle */}
-        <div className="flex items-center gap-2 select-none">
-          <button
-            onClick={() => setUseIndex(false)}
-            className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-              !useIndex
-                ? 'border-red-500 text-red-400 bg-[#ff000012]'
-                : 'border-ch-border text-ch-muted hover:border-ch-border'
-            }`}
-            title="query_plan_direct_read_from_text_index=0, use_skip_indexes_on_data_read=0"
-          >
-            Direct scan
-          </button>
-          <button
-            onClick={() => setUseIndex(true)}
-            className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-              useIndex
-                ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-                : 'border-ch-border text-ch-muted hover:border-ch-border'
-            }`}
-            title="query_plan_direct_read_from_text_index=1, use_skip_indexes_on_data_read=1"
-          >
-            Index scan
-          </button>
+        {/* Index mode toggle */}
+        <div className="flex items-center gap-1 select-none">
+          {([
+            { value: 'fts',       label: 'FTS',          title: 'Inverted index: enable_full_text_index=1, query_plan_direct_read_from_text_index=1' },
+            { value: 'bloom',     label: 'Bloom filter',  title: 'Token bloom filter: use_skip_indexes_on_data_read=1, enable_full_text_index=0' },
+            { value: 'full_scan', label: 'Full scan',     title: 'No index: use_skip_indexes_on_data_read=0, enable_full_text_index=0, uses ILIKE' },
+          ] as const).map(({ value, label, title }) => (
+            <button
+              key={value}
+              onClick={() => setIndexMode(value)}
+              title={title}
+              className={`px-3 py-1 rounded-full text-xs border transition-colors ${
+                indexMode === value
+                  ? value === 'full_scan'
+                    ? 'border-red-500 text-red-400 bg-[#ff000012]'
+                    : 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
+                  : 'border-ch-border text-ch-muted hover:border-ch-border'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </header>
 
@@ -256,6 +256,34 @@ export default function Home() {
                   }`}
                 >
                   {r.label}
+                </button>
+              ))}
+              <span className="text-ch-border mx-1">|</span>
+              {(['issues', 'prs'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`px-3 py-1 rounded-full text-xs border transition-colors ${
+                    mode === m
+                      ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
+                      : 'border-ch-border text-ch-muted hover:border-ch-yellow hover:text-ch-yellow'
+                  }`}
+                >
+                  {m === 'issues' ? 'Issues' : 'Pull Requests'}
+                </button>
+              ))}
+              <span className="text-ch-border mx-1">|</span>
+              {(['any', 'all'] as const).map((o) => (
+                <button
+                  key={o}
+                  onClick={() => setOp(o)}
+                  className={`px-3 py-1 rounded-full text-xs border transition-colors font-mono ${
+                    op === o
+                      ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
+                      : 'border-ch-border text-ch-muted hover:border-ch-yellow hover:text-ch-yellow'
+                  }`}
+                >
+                  {o === 'any' ? 'OR' : 'AND'}
                 </button>
               ))}
             </div>
@@ -315,7 +343,7 @@ export default function Home() {
                     <SQLButton onClick={() => openSQL(reposSql)} />
                   )}
                   {reposState === 'done' && reposElapsed && (
-                    <ElapsedBadge elapsed={reposElapsed} useIndex={useIndex} />
+                    <ElapsedBadge elapsed={reposElapsed} indexMode={indexMode} />
                   )}
                 </div>
               </div>
@@ -336,7 +364,7 @@ export default function Home() {
             <div className="flex-1 flex flex-col min-h-0 gap-3">
               {!selectedRepo ? (
                 <div className="flex-1 flex items-center justify-center">
-                  <p className="text-ch-muted text-sm">Click a bubble to explore activity and issues</p>
+                  <p className="text-ch-muted text-sm">Click a bubble to explore activity and {mode === 'issues' ? 'issues' : 'pull requests'}</p>
                 </div>
               ) : (
                 <>
@@ -361,7 +389,7 @@ export default function Home() {
                           <SQLButton onClick={() => openSQL(heatmapSql)} />
                         )}
                         {heatmapState === 'done' && heatmapElapsed && (
-                          <ElapsedBadge elapsed={heatmapElapsed} useIndex={useIndex} />
+                          <ElapsedBadge elapsed={heatmapElapsed} indexMode={indexMode} />
                         )}
                       </div>
                     </div>
@@ -377,21 +405,21 @@ export default function Home() {
                   <div className="flex-1 border border-ch-border rounded-xl bg-ch-gray p-4 flex flex-col min-h-0">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
-                        Top Issues
+                        {mode === 'issues' ? 'Top Issues' : 'Top Pull Requests'}
                       </h3>
                       <div className="flex items-center gap-2">
                         {prsState === 'done' && prsSql && (
                           <SQLButton onClick={() => openSQL(prsSql)} />
                         )}
                         {prsState === 'done' && prsElapsed && (
-                          <ElapsedBadge elapsed={prsElapsed} useIndex={useIndex} />
+                          <ElapsedBadge elapsed={prsElapsed} indexMode={indexMode} />
                         )}
                       </div>
                     </div>
                     {prsState === 'loading' && <Spinner label="Loading issues…" />}
                     {prsState === 'done' && (
                       <div className="flex-1 overflow-y-auto min-h-0">
-                        <PRList prs={prs} repo={selectedRepo!} />
+                        <PRList prs={prs} repo={selectedRepo!} mode={mode} />
                       </div>
                     )}
                   </div>
@@ -442,21 +470,14 @@ function Spinner({ label }: { label: string }) {
   )
 }
 
-function ElapsedBadge({ elapsed, useIndex }: { elapsed: string; useIndex: boolean }) {
+function ElapsedBadge({ elapsed, indexMode }: { elapsed: string; indexMode: string }) {
+  const icon  = indexMode === 'fts' ? '⚡' : indexMode === 'bloom' ? '🔍' : '🐢'
+  const color = indexMode === 'full_scan'
+    ? 'border-red-500 text-red-400 bg-[#ff000012]'
+    : 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
   return (
-    <span
-      title={
-        useIndex
-          ? 'Index scan: query_plan_direct_read_from_text_index=1, use_skip_indexes_on_data_read=1'
-          : 'Direct scan: query_plan_direct_read_from_text_index=0, use_skip_indexes_on_data_read=0'
-      }
-      className={`text-xs font-mono px-2 py-0.5 rounded-full border ${
-        useIndex
-          ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-          : 'border-red-500 text-red-400 bg-[#ff000012]'
-      }`}
-    >
-      {elapsed}s {useIndex ? '⚡' : '🐢'}
+    <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${color}`}>
+      {elapsed}s {icon}
     </span>
   )
 }

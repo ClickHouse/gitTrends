@@ -12,13 +12,14 @@ interface Issue {
 interface IssueListProps {
   prs: Issue[]
   repo: string
+  mode: 'issues' | 'prs'
 }
 
-export default function IssueList({ prs, repo }: IssueListProps) {
+export default function IssueList({ prs, repo, mode }: IssueListProps) {
   if (prs.length === 0) {
     return (
       <p className="text-center text-ch-muted py-8 text-sm">
-        No issues found for this search.
+        No {mode === 'issues' ? 'issues' : 'pull requests'} found for this search.
       </p>
     )
   }
@@ -32,7 +33,7 @@ export default function IssueList({ prs, repo }: IssueListProps) {
           year: 'numeric',
         })
         const isOpen = issue.state === 'open'
-        const issueUrl = `https://github.com/${repo}/issues/${issue.number}`
+        const issueUrl = `https://github.com/${repo}/${mode === 'prs' ? 'pull' : 'issues'}/${issue.number}`
 
         return (
           <a

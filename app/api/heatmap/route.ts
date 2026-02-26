@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { clickhouse, toDisplaySql } from '@/lib/clickhouse'
+import { clickhouse, toDisplaySql, indexSettings, bloomBodyCondition, IndexMode } from '@/lib/clickhouse'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -13,17 +13,29 @@ const SINCE_SQL: Record<string, string> = {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const term    = searchParams.get('term')?.trim()
-  const repo_id = searchParams.get('repo_id')?.trim()
-  const useIndex = searchParams.get('useIndex') !== 'false'
-  const since    = searchParams.get('since') ?? '1M'
+  const term      = searchParams.get('term')?.trim()
+  const repo_id   = searchParams.get('repo_id')?.trim()
+  const indexMode = (searchParams.get('indexMode') ?? 'fts') as IndexMode
+  const since     = searchParams.get('since') ?? '1M'
 
   if (!term || !repo_id) {
     return NextResponse.json({ error: 'Missing term or repo_id' }, { status: 400 })
   }
-  const database = process.env.CLICKHOUSE_DB
-  const table = process.env.CLICKHOUSE_TABLE ?? 'github_events'
-  const dateFilter = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const mode        = searchParams.get('mode') ?? 'issues'
+  const op          = searchParams.get('op') ?? 'any'
+  const database    = process.env.CLICKHOUSE_DB
+  const table       = process.env.CLICKHOUSE_TABLE ?? 'github_events'
+  const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const eventFilter = mode === 'prs'
+    ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
+    : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
+  const bloom = bloomBodyCondition(term, op)
+  const bodyCondition = indexMode === 'full_scan'
+    ? `body ILIKE {pattern:String}`
+    : indexMode === 'bloom'
+    ? bloom.condition
+    : op === 'all' ? `hasAllTokens(body, {term:String})` : `hasAnyTokens(body, {term:String})`
+  const queryParams = indexMode === 'full_scan' ? { repo_id, pattern: `%${term}%` } : indexMode === 'bloom' ? { repo_id, ...bloom.params } : { term, repo_id }
 
   const query = `
     SELECT
@@ -33,25 +45,22 @@ export async function GET(req: NextRequest) {
     FROM ${database}.${table}
     WHERE
       repo_id = {repo_id:String}
-      AND event_type IN ('IssueCommentEvent', 'IssuesEvent')
-      AND hasAnyTokens(body, {term:String})
+      AND ${eventFilter}
+      AND ${bodyCondition}
       AND ${dateFilter}
     GROUP BY day_of_week, hour
     ORDER BY day_of_week, hour
   `
 
-  const sql = toDisplaySql(query, { term, repo_id }, useIndex)
+  const sql = toDisplaySql(query, indexMode === 'full_scan' ? { repo_id, pattern: `%${term}%` } : indexMode === 'bloom' ? { repo_id, ...bloom.params } : { term, repo_id }, indexMode)
 
   try {
     const start = Date.now()
     const result = await clickhouse.query({
       query,
-      query_params: { term, repo_id },
+      query_params: queryParams,
       format: 'JSONEachRow',
-      clickhouse_settings: {
-        query_plan_direct_read_from_text_index: useIndex ? 1 : 0,
-        use_skip_indexes_on_data_read: useIndex ? 1 : 0,
-      },
+      clickhouse_settings: indexSettings(indexMode),
     })
     const rows = await result.json<{ day_of_week: number; hour: number; cnt: string }>()
     const elapsed = ((Date.now() - start) / 1000).toFixed(2)
