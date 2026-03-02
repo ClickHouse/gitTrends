@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { clickhouse, toDisplaySql, indexSettings, bloomBodyCondition, IndexMode } from '@/lib/clickhouse'
+import { clickhouse, toDisplaySql, indexSettings, bodyCondition, IndexMode } from '@/lib/clickhouse'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -22,20 +22,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Missing term or repo_id' }, { status: 400 })
   }
   const mode        = searchParams.get('mode') ?? 'issues'
-  const op          = searchParams.get('op') ?? 'any'
+  const op          = searchParams.get('op') ?? 'all'
   const database    = process.env.CLICKHOUSE_DB
   const table       = process.env.CLICKHOUSE_TABLE ?? 'github_events'
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
   const eventFilter = mode === 'prs'
     ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
     : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
-  const bloom = bloomBodyCondition(term, op)
-  const bodyCondition = indexMode === 'full_scan'
-    ? `body ILIKE {pattern:String}`
-    : indexMode === 'bloom'
-    ? bloom.condition
-    : op === 'all' ? `hasAllTokens(body, {term:String})` : `hasAnyTokens(body, {term:String})`
-  const queryParams = indexMode === 'full_scan' ? { repo_id, pattern: `%${term}%` } : indexMode === 'bloom' ? { repo_id, ...bloom.params } : { term, repo_id }
+  const body = bodyCondition(term, op, indexMode)
+  const queryParams = { repo_id, ...body.params }
 
   const query = `
     SELECT
@@ -49,14 +44,14 @@ export async function GET(req: NextRequest) {
     WHERE
       repo_id = {repo_id:String}
       AND ${eventFilter}
-      AND ${bodyCondition}
+      AND ${body.condition}
       AND ${dateFilter}
     ORDER BY comments DESC
     LIMIT 1 BY number
     LIMIT 20
   `
 
-  const sql = toDisplaySql(query, indexMode === 'full_scan' ? { repo_id, pattern: `%${term}%` } : indexMode === 'bloom' ? { repo_id, ...bloom.params } : { term, repo_id }, indexMode)
+  const sql = toDisplaySql(query, queryParams, indexMode)
 
   try {
     const start = Date.now()

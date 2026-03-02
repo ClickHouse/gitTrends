@@ -11,6 +11,13 @@ const SINCE_SQL: Record<string, string> = {
   'all': `1=1`,
 }
 
+const BUCKET_FN: Record<string, string> = {
+  '1M':  'toStartOfDay',
+  '3M':  'toStartOfDay',
+  '1Y':  'toStartOfWeek',
+  'all': 'toStartOfMonth',
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const term      = searchParams.get('term')?.trim()
@@ -20,29 +27,30 @@ export async function GET(req: NextRequest) {
   if (!term) {
     return NextResponse.json({ error: 'Missing term' }, { status: 400 })
   }
+
   const mode        = searchParams.get('mode') ?? 'issues'
   const op          = searchParams.get('op') ?? 'all'
   const database    = process.env.CLICKHOUSE_DB
   const table       = process.env.CLICKHOUSE_TABLE ?? 'github_events'
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const bucketFn    = BUCKET_FN[since] ?? 'toStartOfMonth'
   const eventFilter = mode === 'prs'
     ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
     : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
+
   const body = bodyCondition(term, op, indexMode)
 
   const query = `
     SELECT
-      repo_name,
-      dictGet(github.repo_name_to_id_dict, 'repo_id', cityHash64(repo_name)) AS repo_id,
-      count() AS mentions
+      ${bucketFn}(created_at) AS bucket,
+      count() AS count
     FROM ${database}.${table}
     WHERE
       ${eventFilter}
       AND ${body.condition}
       AND ${dateFilter}
-    GROUP BY repo_name
-    ORDER BY mentions DESC
-    LIMIT 20
+    GROUP BY bucket
+    ORDER BY bucket ASC
   `
 
   const sql = toDisplaySql(query, body.params, indexMode)
@@ -55,10 +63,10 @@ export async function GET(req: NextRequest) {
       format: 'JSONEachRow',
       clickhouse_settings: indexSettings(indexMode),
     })
-    const rows = await result.json<{ repo_name: string; repo_id: string; mentions: string }>()
+    const rows = await result.json<{ bucket: string; count: string }>()
     const elapsed = ((Date.now() - start) / 1000).toFixed(2)
 
-    return NextResponse.json({ rows, elapsed, indexMode, sql })
+    return NextResponse.json({ rows, elapsed, sql, granularity: bucketFn })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message, sql }, { status: 500 })

@@ -6,8 +6,9 @@ import PRList from '@/components/PRList'
 
 const BubbleChart = dynamic(() => import('@/components/BubbleChart'), { ssr: false })
 const HeatMap     = dynamic(() => import('@/components/HeatMap'),     { ssr: false })
+const Histogram   = dynamic(() => import('@/components/Histogram'),   { ssr: false })
 
-const SUGGESTIONS = ['kubernetes', 'docker', 'clickhouse', 'rust', 'wasm', 'llm', 'grpc', 'kafka']
+const SUGGESTIONS = ['clickhouse', 'iceberg', 'vector', 'inverted index']
 
 const DATE_RANGES = [
   { label: '1 month',  value: '1M'  },
@@ -32,7 +33,7 @@ export default function Home() {
   const [indexMode, setIndexMode] = useState<'fts' | 'bloom' | 'full_scan'>('fts')
   const [since,    setSince]    = useState('1M')
   const [mode,     setMode]     = useState<'issues' | 'prs'>('issues')
-  const [op,       setOp]       = useState<'any' | 'all'>('any')
+  const [op,       setOp]       = useState<'any' | 'all'>('all')
 
   const [repos,        setRepos]        = useState<RepoRow[]>([])
   const [reposState,   setReposState]   = useState<LoadState>('idle')
@@ -51,6 +52,12 @@ export default function Home() {
   const [prsState,   setPrsState]   = useState<LoadState>('idle')
   const [prsElapsed, setPrsElapsed] = useState<string | null>(null)
   const [prsSql,     setPrsSql]     = useState<string | null>(null)
+
+  const [histData,        setHistData]        = useState<{ bucket: string; count: string }[]>([])
+  const [histState,       setHistState]       = useState<LoadState>('idle')
+  const [histElapsed,     setHistElapsed]     = useState<string | null>(null)
+  const [histSql,         setHistSql]         = useState<string | null>(null)
+  const [histGranularity, setHistGranularity] = useState('toStartOfDay')
 
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
@@ -87,21 +94,39 @@ export default function Home() {
       setReposElapsed(null)
       setReposError(null)
       setReposSql(null)
+      setHistState('loading')
+      setHistElapsed(null)
+      setHistSql(null)
+
+      const params = `term=${encodeURIComponent(t)}&${buildParams()}`
 
       try {
-        const res  = await fetch(`/api/repos?term=${encodeURIComponent(t)}&${buildParams()}`, {
-          signal: controller.signal,
-        })
-        const json = await res.json()
-        if (json.sql) setReposSql(json.sql)
-        if (json.error) throw new Error(json.error)
-        setRepos(json.rows)
-        setReposElapsed(json.elapsed)
+        const [reposRes, histRes] = await Promise.all([
+          fetch(`/api/repos?${params}`,      { signal: controller.signal }),
+          fetch(`/api/histogram?${params}`,  { signal: controller.signal }),
+        ])
+        const [reposJson, histJson] = await Promise.all([reposRes.json(), histRes.json()])
+
+        if (reposJson.sql) setReposSql(reposJson.sql)
+        if (reposJson.error) throw new Error(reposJson.error)
+        setRepos(reposJson.rows)
+        setReposElapsed(reposJson.elapsed)
         setReposState('done')
+
+        if (histJson.sql) setHistSql(histJson.sql)
+        if (!histJson.error) {
+          setHistData(histJson.rows)
+          setHistElapsed(histJson.elapsed)
+          setHistGranularity(histJson.granularity)
+          setHistState('done')
+        } else {
+          setHistState('error')
+        }
       } catch (err: unknown) {
         if ((err as Error).name === 'AbortError') return
         setReposError((err as Error).message)
         setReposState('error')
+        setHistState('error')
       }
     },
     [buildParams]
@@ -164,6 +189,10 @@ export default function Home() {
     setPrsState('idle')
     setPrsElapsed(null)
     setPrsSql(null)
+    setHistData([])
+    setHistState('idle')
+    setHistElapsed(null)
+    setHistSql(null)
   }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -228,7 +257,7 @@ export default function Home() {
               value={term}
               onChange={(e) => setTerm(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="kubernetes, docker, clickhouse…"
+              placeholder="clickhouse, iceberg, vector..."
               className="flex-1 bg-ch-gray border border-ch-border rounded-lg px-4 py-2.5 text-sm
                          placeholder:text-ch-muted focus:outline-none focus:border-ch-yellow
                          transition-colors font-mono"
@@ -273,7 +302,7 @@ export default function Home() {
                 </button>
               ))}
               <span className="text-ch-border mx-1">|</span>
-              {(['any', 'all'] as const).map((o) => (
+              {(['all', 'any'] as const).map((o) => (
                 <button
                   key={o}
                   onClick={() => setOp(o)}
@@ -305,6 +334,32 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* ─── Histogram ───────────────────────────────────────────────────── */}
+      {histState !== 'idle' && (
+        <div className="px-6 pb-3 flex-shrink-0" style={{ height: 180 }}>
+          <div className="h-full border border-ch-border rounded-xl bg-ch-gray px-3 pt-2 pb-1 flex flex-col">
+            <div className="flex items-center justify-between mb-1 flex-shrink-0">
+              <span className="text-xs font-semibold uppercase tracking-wider text-white">
+                Mentions over time
+                <span className="font-normal normal-case text-ch-muted ml-1">
+                  · per {histGranularity === 'toStartOfMonth' ? 'month' : histGranularity === 'toStartOfWeek' ? 'week' : 'day'}
+                </span>
+              </span>
+              <div className="flex items-center gap-2">
+                {histState === 'done' && histSql     && <SQLButton onClick={() => openSQL(histSql)} />}
+                {histState === 'done' && histElapsed && <ElapsedBadge elapsed={histElapsed} indexMode={indexMode} />}
+              </div>
+            </div>
+            {histState === 'loading' && <Spinner label="Loading histogram…" />}
+            {histState === 'done' && histData.length > 0 && (
+              <div className="flex-1 min-h-0">
+                <Histogram data={histData} granularity={histGranularity} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ─── Results ─────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col lg:flex-row gap-4 px-6 pb-6 min-h-0">
