@@ -38,7 +38,7 @@ export default function Histogram({ data, granularity }: HistogramProps) {
     xAxis: {
       type: 'category',
       data: data.map((d) => formatBucket(d.bucket, granularity)),
-      axisLabel: { color: '#555', fontSize: 10, fontFamily: 'monospace' },
+      axisLabel: { color: '#555', fontSize: 10, fontFamily: 'Inter, system-ui, sans-serif' },
       axisLine:  { lineStyle: { color: '#2a2a2a' } },
       axisTick:  { show: false },
     },
@@ -48,7 +48,7 @@ export default function Histogram({ data, granularity }: HistogramProps) {
       axisLabel: {
         color: '#555',
         fontSize: 10,
-        fontFamily: 'monospace',
+        fontFamily: 'Inter, system-ui, sans-serif',
         formatter: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v),
       },
     },

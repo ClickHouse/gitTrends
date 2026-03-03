@@ -14,52 +14,42 @@ const SINCE_SQL: Record<string, string> = {
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const term      = searchParams.get('term')?.trim()
-  const repo_id   = searchParams.get('repo_id')?.trim()
   const indexMode = (searchParams.get('indexMode') ?? 'fts') as IndexMode
   const since     = searchParams.get('since') ?? '1M'
+  const repo_id   = searchParams.get('repo_id')?.trim()
+  const excludeBots = searchParams.get('excludeBots') !== 'false'
 
   if (!term || !repo_id) {
     return NextResponse.json({ error: 'Missing term or repo_id' }, { status: 400 })
   }
-  const mode        = searchParams.get('mode') ?? 'issues'
+
   const op          = searchParams.get('op') ?? 'all'
   const database    = process.env.CLICKHOUSE_DB
   const table       = process.env.CLICKHOUSE_TABLE ?? 'github_events'
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
-  const outerEvent = mode === 'prs' ? `'PullRequestEvent'` : `'IssuesEvent'`
-  const innerEvents = mode === 'prs'
-    ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
-    : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
-  const body = bodyCondition(term, op, indexMode)
+  const body        = bodyCondition(term, op, indexMode)
   const queryParams = { repo_id, ...body.params }
+  const botFilter   = excludeBots
+    ? `AND actor_login NOT LIKE '%[bot]%'\n      AND actor_login NOT LIKE '%-bot'`
+    : ''
 
   const query = `
     SELECT
-      e.number,
-      any(e.title)       AS title,
-      any(e.actor_login) AS actor_login,
-      min(e.created_at)  AS created_at,
-      any(e.comments)    AS comments,
-      any(e.state)       AS state,
-      m.mentions
-    FROM ${database}.${table} AS e
-    INNER JOIN (
-      SELECT number, count() AS mentions
-      FROM ${database}.${table}
-      WHERE
-        repo_id = {repo_id:String}
-        AND ${innerEvents}
-        AND ${body.condition}
-        AND ${dateFilter}
-      GROUP BY number
-      ORDER BY mentions DESC
-      LIMIT 20
-    ) AS m ON e.number = m.number
+      actor_login,
+      countIf(event_type = 'IssuesEvent')                                              AS issues,
+      countIf(event_type = 'PullRequestEvent')                                         AS prs,
+      countIf(event_type IN ('IssueCommentEvent', 'PullRequestReviewCommentEvent'))     AS comments,
+      count()                                                                           AS total
+    FROM ${database}.${table}
     WHERE
-      e.repo_id = {repo_id:String}
-      AND e.event_type = ${outerEvent}
-    GROUP BY e.number, m.mentions
-    ORDER BY m.mentions DESC
+      repo_id = {repo_id:String}
+      AND event_type IN ('IssueCommentEvent', 'IssuesEvent', 'PullRequestEvent', 'PullRequestReviewCommentEvent')
+      AND ${body.condition}
+      AND ${dateFilter}
+      ${botFilter}
+    GROUP BY actor_login
+    ORDER BY total DESC
+    LIMIT 10
   `
 
   const sql = toDisplaySql(query, queryParams, indexMode)
@@ -73,13 +63,11 @@ export async function GET(req: NextRequest) {
       clickhouse_settings: indexSettings(indexMode),
     })
     const rows = await result.json<{
-      number: number
-      title: string
       actor_login: string
-      created_at: string
-      comments: number
-      state: string
-      mentions: number
+      issues: string
+      prs: string
+      comments: string
+      total: string
     }>()
     const elapsed = ((Date.now() - start) / 1000).toFixed(2)
 

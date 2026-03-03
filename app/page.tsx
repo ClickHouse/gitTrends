@@ -3,10 +3,14 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import PRList from '@/components/PRList'
+import { Button, ButtonGroup, SearchField, Panel, Badge, Switch } from '@clickhouse/click-ui'
+import { chStream, fmtRows, type IndexMode } from '@/lib/ch-stream'
+import { buildReposQuery, buildHistogramQuery, buildContributorsQuery, buildPrsQuery } from '@/lib/queries'
 
-const BubbleChart = dynamic(() => import('@/components/BubbleChart'), { ssr: false })
-const HeatMap     = dynamic(() => import('@/components/HeatMap'),     { ssr: false })
-const Histogram   = dynamic(() => import('@/components/Histogram'),   { ssr: false })
+const PackedBubbleChart  = dynamic(() => import('@/components/PackedBubbleChart'),  { ssr: false })
+const HeatMap            = dynamic(() => import('@/components/HeatMap'),            { ssr: false })
+const Histogram          = dynamic(() => import('@/components/Histogram'),          { ssr: false })
+const ContributorsChart  = dynamic(() => import('@/components/ContributorsChart'),  { ssr: false })
 
 const SUGGESTIONS = ['clickhouse', 'iceberg', 'vector', 'inverted index']
 
@@ -17,11 +21,12 @@ const DATE_RANGES = [
   { label: 'All time', value: 'all' },
 ]
 
-interface RepoRow  { repo_name: string; repo_id: string; mentions: string }
-interface HeatRow  { day_of_week: number; hour: number; cnt: string }
+interface RepoRow        { repo_name: string; repo_id: string; mentions: string }
+interface HeatRow        { day_of_week: number; hour: number; cnt: string }
+interface ContributorRow { actor_login: string; issues: string; prs: string; comments: string; total: string }
 interface Issue {
   number: number; title: string; actor_login: string; created_at: string
-  comments: number; state: string
+  comments: number; state: string; mentions: number
 }
 
 type LoadState = 'idle' | 'loading' | 'done' | 'error'
@@ -30,7 +35,7 @@ type LoadState = 'idle' | 'loading' | 'done' | 'error'
 
 export default function Home() {
   const [term,     setTerm]     = useState('')
-  const [indexMode, setIndexMode] = useState<'fts' | 'bloom' | 'full_scan'>('fts')
+  const [indexMode, setIndexMode] = useState<IndexMode>('fts')
   const [since,    setSince]    = useState('1M')
   const [mode,     setMode]     = useState<'issues' | 'prs'>('issues')
   const [op,       setOp]       = useState<'any' | 'all'>('all')
@@ -40,23 +45,28 @@ export default function Home() {
   const [reposElapsed, setReposElapsed] = useState<string | null>(null)
   const [reposError,   setReposError]   = useState<string | null>(null)
   const [reposSql,     setReposSql]     = useState<string | null>(null)
+  const [reposReadRows, setReposReadRows] = useState(0)
 
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
 
-  const [heatmapData,    setHeatmapData]    = useState<HeatRow[]>([])
-  const [heatmapState,   setHeatmapState]   = useState<LoadState>('idle')
-  const [heatmapElapsed, setHeatmapElapsed] = useState<string | null>(null)
-  const [heatmapSql,     setHeatmapSql]     = useState<string | null>(null)
+  const [contribData,    setContribData]    = useState<ContributorRow[]>([])
+  const [contribState,   setContribState]   = useState<LoadState>('idle')
+  const [contribElapsed, setContribElapsed] = useState<string | null>(null)
+  const [contribSql,     setContribSql]     = useState<string | null>(null)
+  const [contribReadRows, setContribReadRows] = useState(0)
+  const [excludeBots,    setExcludeBots]    = useState(true)
 
   const [prs,        setPrs]        = useState<Issue[]>([])
   const [prsState,   setPrsState]   = useState<LoadState>('idle')
   const [prsElapsed, setPrsElapsed] = useState<string | null>(null)
   const [prsSql,     setPrsSql]     = useState<string | null>(null)
+  const [prsReadRows, setPrsReadRows] = useState(0)
 
   const [histData,        setHistData]        = useState<{ bucket: string; count: string }[]>([])
   const [histState,       setHistState]       = useState<LoadState>('idle')
   const [histElapsed,     setHistElapsed]     = useState<string | null>(null)
   const [histSql,         setHistSql]         = useState<string | null>(null)
+  const [histReadRows,    setHistReadRows]    = useState(0)
   const [histGranularity, setHistGranularity] = useState('toStartOfDay')
 
   const openSQL = useCallback((sql: string) => {
@@ -64,15 +74,8 @@ export default function Home() {
     window.open(`https://sql.clickhouse.com/?query=${encodeURIComponent(encoded)}`, '_blank')
   }, [])
 
-  const abortRef = useRef<AbortController | null>(null)
-
-  const buildParams = useCallback(
-    (extra: Record<string, string> = {}) => {
-      const p = new URLSearchParams({ indexMode, since, mode, op, ...extra })
-      return p.toString()
-    },
-    [indexMode, since, mode, op]
-  )
+  const abortRef      = useRef<AbortController | null>(null)
+  const repoContextRef = useRef<{ term: string; repoId: string; op: string; indexMode: IndexMode; since: string; mode: string } | null>(null)
 
   const search = useCallback(
     async (searchTerm: string) => {
@@ -82,95 +85,99 @@ export default function Home() {
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
+      const signal = controller.signal
 
       setSelectedRepo(null)
-      setHeatmapData([])
       setPrs([])
-      setHeatmapState('idle')
       setPrsState('idle')
-      setHeatmapSql(null)
       setPrsSql(null)
       setReposState('loading')
       setReposElapsed(null)
       setReposError(null)
       setReposSql(null)
+      setReposReadRows(0)
       setHistState('loading')
-      setHistElapsed(null)
-      setHistSql(null)
+      setHistReadRows(0)
+      setContribState('idle')
+      setContribData([])
+      setContribElapsed(null)
+      setContribSql(null)
 
-      const params = `term=${encodeURIComponent(t)}&${buildParams()}`
+      const isAbort = (e: unknown) => (e as Error).name === 'AbortError'
 
-      try {
-        const [reposRes, histRes] = await Promise.all([
-          fetch(`/api/repos?${params}`,      { signal: controller.signal }),
-          fetch(`/api/histogram?${params}`,  { signal: controller.signal }),
-        ])
-        const [reposJson, histJson] = await Promise.all([reposRes.json(), histRes.json()])
+      const reposQ = buildReposQuery(t, op, indexMode, since, mode)
+      chStream<RepoRow>(reposQ.sql, reposQ.params, indexMode, (p) => setReposReadRows(p.readRows), signal)
+        .then(({ rows, elapsed, sql }) => {
+          setReposSql(sql); setRepos(rows); setReposElapsed(elapsed); setReposState('done')
+        })
+        .catch((e) => { if (!isAbort(e)) { setReposError(e.message); setReposState('error') } })
 
-        if (reposJson.sql) setReposSql(reposJson.sql)
-        if (reposJson.error) throw new Error(reposJson.error)
-        setRepos(reposJson.rows)
-        setReposElapsed(reposJson.elapsed)
-        setReposState('done')
-
-        if (histJson.sql) setHistSql(histJson.sql)
-        if (!histJson.error) {
-          setHistData(histJson.rows)
-          setHistElapsed(histJson.elapsed)
-          setHistGranularity(histJson.granularity)
-          setHistState('done')
-        } else {
-          setHistState('error')
-        }
-      } catch (err: unknown) {
-        if ((err as Error).name === 'AbortError') return
-        setReposError((err as Error).message)
-        setReposState('error')
-        setHistState('error')
-      }
+      const histQ = buildHistogramQuery(t, op, indexMode, since, mode)
+      chStream<{ bucket: string; count: string }>(histQ.sql, histQ.params, indexMode, (p) => setHistReadRows(p.readRows), signal)
+        .then(({ rows, elapsed, sql }) => {
+          setHistSql(sql); setHistData(rows); setHistElapsed(elapsed)
+          setHistGranularity(histQ.granularity); setHistState('done')
+        })
+        .catch((e) => { if (!isAbort(e)) setHistState('error') })
     },
-    [buildParams]
+    [indexMode, since, mode, op]
   )
+
+  const fetchContributors = useCallback(async (
+    ctx: NonNullable<typeof repoContextRef.current>, tryExcludeBots: boolean
+  ) => {
+    setContribState('loading')
+    setContribReadRows(0)
+    try {
+      const q = buildContributorsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, tryExcludeBots)
+      const res = await chStream<ContributorRow>(q.sql, q.params, ctx.indexMode, (p) => setContribReadRows(p.readRows))
+      if (res.rows.length === 0 && tryExcludeBots) {
+        // no humans — fall back to including bots
+        setExcludeBots(false)
+        const q2 = buildContributorsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, false)
+        const res2 = await chStream<ContributorRow>(q2.sql, q2.params, ctx.indexMode, (p) => setContribReadRows(p.readRows))
+        setContribSql(res2.sql); setContribData(res2.rows); setContribElapsed(res2.elapsed)
+      } else {
+        setExcludeBots(tryExcludeBots)
+        setContribSql(res.sql); setContribData(res.rows); setContribElapsed(res.elapsed)
+      }
+      setContribState('done')
+    } catch (e) { console.error('Contributors query failed:', e); setContribState('error') }
+  }, [])
 
   const selectRepo = useCallback(
-    async (repoName: string) => {
+    (repoName: string) => {
       if (!term.trim()) return
       const repoId = repos.find((r) => r.repo_name === repoName)?.repo_id
-      if (!repoId) return
+      console.log('selectRepo:', repoName, '→ repo_id =', JSON.stringify(repoId))
+      if (!repoId) { console.warn('selectRepo: no repo_id for', repoName, repos); return }
+
+      const ctx = { term: term.trim(), repoId, op, indexMode, since, mode }
+      repoContextRef.current = ctx
+
       setSelectedRepo(repoName)
-      setHeatmapState('loading')
       setPrsState('loading')
-      setHeatmapElapsed(null)
+      setContribState('loading')
       setPrsElapsed(null)
+      setContribElapsed(null)
+      setContribData([])
+      setPrsReadRows(0)
 
-      const params = `term=${encodeURIComponent(term.trim())}&repo_id=${encodeURIComponent(repoId)}&${buildParams()}`
+      const prsQ = buildPrsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, ctx.mode)
+      chStream<Issue>(prsQ.sql, prsQ.params, ctx.indexMode, (p) => setPrsReadRows(p.readRows))
+        .then(({ rows, elapsed, sql }) => {
+          setPrsSql(sql); setPrs(rows); setPrsElapsed(elapsed); setPrsState('done')
+        })
+        .catch((e) => { console.error('Issues/PRs query failed:', e); setPrsState('error') })
 
-      const [heatRes, prsRes] = await Promise.all([
-        fetch(`/api/heatmap?${params}`),
-        fetch(`/api/prs?${params}`),
-      ])
-      const [heatJson, prsJson] = await Promise.all([heatRes.json(), prsRes.json()])
-
-      if (heatJson.sql) setHeatmapSql(heatJson.sql)
-      if (!heatJson.error) {
-        setHeatmapData(heatJson.rows)
-        setHeatmapElapsed(heatJson.elapsed)
-        setHeatmapState('done')
-      } else {
-        setHeatmapState('error')
-      }
-
-      if (prsJson.sql) setPrsSql(prsJson.sql)
-      if (!prsJson.error) {
-        setPrs(prsJson.rows)
-        setPrsElapsed(prsJson.elapsed)
-        setPrsState('done')
-      } else {
-        setPrsState('error')
-      }
+      fetchContributors(ctx, true)
     },
-    [term, repos, buildParams]
+    [term, repos, op, indexMode, since, mode, fetchContributors]
   )
+
+  const toggleExcludeBots = useCallback(() => {
+    if (repoContextRef.current) fetchContributors(repoContextRef.current, !excludeBots)
+  }, [excludeBots, fetchContributors])
 
   const resetAll = useCallback(() => {
     abortRef.current?.abort()
@@ -180,19 +187,23 @@ export default function Home() {
     setReposElapsed(null)
     setReposError(null)
     setReposSql(null)
+    setReposReadRows(0)
     setSelectedRepo(null)
-    setHeatmapData([])
-    setHeatmapState('idle')
-    setHeatmapElapsed(null)
-    setHeatmapSql(null)
     setPrs([])
     setPrsState('idle')
     setPrsElapsed(null)
     setPrsSql(null)
+    setPrsReadRows(0)
     setHistData([])
     setHistState('idle')
     setHistElapsed(null)
     setHistSql(null)
+    setHistReadRows(0)
+    setContribData([])
+    setContribState('idle')
+    setContribElapsed(null)
+    setContribSql(null)
+    setContribReadRows(0)
   }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -204,8 +215,9 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indexMode, since, mode, op])
 
+
   return (
-    <div className="h-screen flex flex-col bg-ch-dark text-white overflow-hidden">
+    <div className="min-h-screen lg:h-screen flex flex-col bg-ch-dark text-white overflow-auto lg:overflow-hidden">
 
       {/* ─── Header ──────────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-ch-border">
@@ -221,26 +233,20 @@ export default function Home() {
         </div>
 
         {/* Index mode toggle */}
-        <div className="flex items-center gap-1 select-none">
+        <div className="flex items-center gap-1">
           {([
             { value: 'fts',       label: 'FTS',          title: 'Inverted index: enable_full_text_index=1, query_plan_direct_read_from_text_index=1' },
             { value: 'bloom',     label: 'Bloom filter',  title: 'Token bloom filter: use_skip_indexes_on_data_read=1, enable_full_text_index=0' },
             { value: 'full_scan', label: 'Full scan',     title: 'No index: use_skip_indexes_on_data_read=0, enable_full_text_index=0, uses ILIKE' },
           ] as const).map(({ value, label, title }) => (
-            <button
+            <Button
               key={value}
               onClick={() => setIndexMode(value)}
               title={title}
-              className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-                indexMode === value
-                  ? value === 'full_scan'
-                    ? 'border-red-500 text-red-400 bg-[#ff000012]'
-                    : 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-                  : 'border-ch-border text-ch-muted hover:border-ch-border'
-              }`}
+              type={indexMode === value ? (value === 'full_scan' ? 'danger' : 'primary') : 'secondary'}
             >
               {label}
-            </button>
+            </Button>
           ))}
         </div>
       </header>
@@ -253,81 +259,60 @@ export default function Home() {
           </p>
 
           <div className="flex gap-2">
-            <input
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="clickhouse, iceberg, vector..."
-              className="flex-1 bg-ch-gray border border-ch-border rounded-lg px-4 py-2.5 text-sm
-                         placeholder:text-ch-muted focus:outline-none focus:border-ch-yellow
-                         transition-colors font-mono"
-            />
-            <button
+            <div className="flex-1">
+              <SearchField
+                value={term}
+                onChange={(value) => setTerm(value)}
+                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') search(term) }}
+                placeholder="clickhouse, iceberg, vector..."
+              />
+            </div>
+            <Button
+              type="primary"
               onClick={() => search(term)}
               disabled={reposState === 'loading'}
-              className="px-5 py-2.5 rounded-lg bg-ch-yellow text-ch-dark font-semibold text-sm
-                         hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            >
-              {reposState === 'loading' ? 'Searching…' : 'Search'}
-            </button>
+              loading={reposState === 'loading'}
+              label={reposState === 'loading' ? 'Searching…' : 'Search'}
+            />
           </div>
 
           <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
-            <div className="flex gap-1">
-              {DATE_RANGES.map((r) => (
-                <button
-                  key={r.value}
-                  onClick={() => setSince(r.value)}
-                  className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-                    since === r.value
-                      ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-                      : 'border-ch-border text-ch-muted hover:border-ch-yellow hover:text-ch-yellow'
-                  }`}
-                >
-                  {r.label}
-                </button>
-              ))}
-              <span className="text-ch-border mx-1">|</span>
-              {(['issues', 'prs'] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-                    mode === m
-                      ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-                      : 'border-ch-border text-ch-muted hover:border-ch-yellow hover:text-ch-yellow'
-                  }`}
-                >
-                  {m === 'issues' ? 'Issues' : 'Pull Requests'}
-                </button>
-              ))}
-              <span className="text-ch-border mx-1">|</span>
-              {(['all', 'any'] as const).map((o) => (
-                <button
-                  key={o}
-                  onClick={() => setOp(o)}
-                  className={`px-3 py-1 rounded-full text-xs border transition-colors font-mono ${
-                    op === o
-                      ? 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
-                      : 'border-ch-border text-ch-muted hover:border-ch-yellow hover:text-ch-yellow'
-                  }`}
-                >
-                  {o === 'any' ? 'OR' : 'AND'}
-                </button>
-              ))}
+            <div className="flex items-center gap-2 flex-wrap">
+              <ButtonGroup
+                options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+                selected={since}
+                onClick={setSince}
+              />
+              <span className="text-ch-border">|</span>
+              <ButtonGroup
+                options={[
+                  { value: 'issues', label: 'Issues' },
+                  { value: 'prs',    label: 'Pull Requests' },
+                ]}
+                selected={mode}
+                onClick={(v) => setMode(v as 'issues' | 'prs')}
+              />
+              <span className="text-ch-border">|</span>
+              <ButtonGroup
+                options={[
+                  { value: 'all', label: 'AND' },
+                  { value: 'any', label: 'OR'  },
+                ]}
+                selected={op}
+                onClick={(v) => setOp(v as 'any' | 'all')}
+              />
             </div>
 
             {repos.length === 0 && reposState === 'idle' && (
               <div className="flex flex-wrap gap-1">
                 {SUGGESTIONS.map((s) => (
-                  <button
+                  <Button
                     key={s}
+                    type="secondary"
                     onClick={() => { setTerm(s); search(s) }}
-                    className="px-3 py-1 rounded-full border border-ch-border text-xs text-ch-muted
-                               hover:border-ch-yellow hover:text-ch-yellow transition-colors font-mono"
                   >
                     {s}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -338,31 +323,34 @@ export default function Home() {
       {/* ─── Histogram ───────────────────────────────────────────────────── */}
       {histState !== 'idle' && (
         <div className="px-6 pb-3 flex-shrink-0" style={{ height: 180 }}>
-          <div className="h-full border border-ch-border rounded-xl bg-ch-gray px-3 pt-2 pb-1 flex flex-col">
-            <div className="flex items-center justify-between mb-1 flex-shrink-0">
-              <span className="text-xs font-semibold uppercase tracking-wider text-white">
-                Mentions over time
-                <span className="font-normal normal-case text-ch-muted ml-1">
-                  · per {histGranularity === 'toStartOfMonth' ? 'month' : histGranularity === 'toStartOfWeek' ? 'week' : 'day'}
+          <Panel hasBorder radii="lg" padding="sm" className="h-full">
+            <div className="flex flex-col w-full h-full">
+              <div className="flex items-center justify-between flex-shrink-0 mb-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-white">
+                  Mentions over time
+                  <span className="font-normal normal-case text-ch-muted ml-1">
+                    · per {histGranularity === 'toStartOfMonth' ? 'month' : histGranularity === 'toStartOfWeek' ? 'week' : 'day'}
+                  </span>
                 </span>
-              </span>
-              <div className="flex items-center gap-2">
-                {histState === 'done' && histSql     && <SQLButton onClick={() => openSQL(histSql)} />}
-                {histState === 'done' && histElapsed && <ElapsedBadge elapsed={histElapsed} indexMode={indexMode} />}
+                <div className="flex items-center gap-2">
+                  {histSql     && <SQLButton onClick={() => openSQL(histSql)} />}
+                  <RowsBadge rows={histReadRows} loading={histState === 'loading'} />
+                  {histElapsed && <ElapsedBadge elapsed={histElapsed} indexMode={indexMode} />}
+                </div>
               </div>
+              {histState === 'loading' && histData.length === 0 && <Spinner label="Loading…" />}
+              {histData.length > 0 && (
+                <div className={`flex-1 min-h-0 transition-opacity duration-200 ${histState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                  <Histogram data={histData} granularity={histGranularity} />
+                </div>
+              )}
             </div>
-            {histState === 'loading' && <Spinner label="Loading histogram…" />}
-            {histState === 'done' && histData.length > 0 && (
-              <div className="flex-1 min-h-0">
-                <Histogram data={histData} granularity={histGranularity} />
-              </div>
-            )}
-          </div>
+          </Panel>
         </div>
       )}
 
       {/* ─── Results ─────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-4 px-6 pb-6 min-h-0">
+      <div className="lg:flex-1 flex flex-col lg:flex-row gap-4 px-6 pb-6 lg:min-h-0">
 
         {reposState === 'idle' ? (
           /* Empty hero */
@@ -376,30 +364,26 @@ export default function Home() {
             </svg>
             <p className="text-ch-muted text-sm max-w-sm">
               Full-text search across <span className="text-white font-mono">10B+</span> GitHub
-              events powered by ClickHouse inverted indexes.
-              <br />
-              Toggle between Direct scan and Index scan to compare speed.
+              events powered by ClickHouse.
+              <br /><br />
+              Toggle between Full-Text Search, Bloom filter or Full scan to compare performances.
             </p>
           </div>
         ) : (
           <>
             {/* ── Left: bubble chart ───────────────────────────────────────── */}
-            <div className="flex flex-col lg:w-[45%] min-h-[380px] lg:min-h-0">
+            <div className="flex flex-col lg:flex-1 min-h-[380px] lg:min-h-0">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-sm font-semibold text-white">
-                  Repositories mentioning{' '}
-                  <span className="text-ch-yellow font-mono">"{term}"</span>
+                  Top Repos
                   <span className="text-ch-muted font-normal">
                     {' '}·{' '}{DATE_RANGES.find((r) => r.value === since)?.label}
                   </span>
                 </h2>
                 <div className="flex items-center gap-2">
-                  {reposState === 'done' && reposSql && (
-                    <SQLButton onClick={() => openSQL(reposSql)} />
-                  )}
-                  {reposState === 'done' && reposElapsed && (
-                    <ElapsedBadge elapsed={reposElapsed} indexMode={indexMode} />
-                  )}
+                  {reposSql && <SQLButton onClick={() => openSQL(reposSql)} />}
+                  <RowsBadge rows={reposReadRows} loading={reposState === 'loading'} />
+                  {reposElapsed && <ElapsedBadge elapsed={reposElapsed} indexMode={indexMode} />}
                 </div>
               </div>
 
@@ -409,14 +393,14 @@ export default function Home() {
                 <p className="text-ch-muted text-sm">No results found.</p>
               )}
               {reposState === 'done' && repos.length > 0 && (
-                <div className="flex-1 border border-ch-border rounded-xl bg-ch-gray overflow-hidden min-h-0">
-                  <BubbleChart data={repos} onSelect={selectRepo} selectedRepo={selectedRepo} />
-                </div>
+                <Panel hasBorder radii="lg" padding="none" className="min-h-[320px] lg:flex-1 overflow-hidden lg:min-h-0">
+                  <PackedBubbleChart data={repos} onSelect={selectRepo} selectedRepo={selectedRepo} />
+                </Panel>
               )}
             </div>
 
             {/* ── Right: detail panel ──────────────────────────────────────── */}
-            <div className="flex-1 flex flex-col min-h-0 gap-3">
+            <div className="lg:flex-1 flex flex-col lg:min-h-0 gap-3">
               {!selectedRepo ? (
                 <div className="flex-1 flex items-center justify-center">
                   <p className="text-ch-muted text-sm">Click a bubble to explore activity and {mode === 'issues' ? 'issues' : 'pull requests'}</p>
@@ -425,16 +409,16 @@ export default function Home() {
                 <>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-ch-yellow font-mono">{selectedRepo}</span>
-                    <button
-                      onClick={() => { setSelectedRepo(null); setHeatmapState('idle'); setPrsState('idle') }}
-                      className="text-ch-muted hover:text-white text-xs ml-1"
+                    <Button
+                      type="secondary"
+                      onClick={() => { setSelectedRepo(null); setPrsState('idle'); setContribState('idle'); setContribData([]) }}
                     >
                       ✕
-                    </button>
+                    </Button>
                   </div>
 
-                  {/* Heatmap */}
-                  <div className="border border-ch-border rounded-xl bg-ch-gray p-4 flex flex-col" style={{ height: 260 }}>
+                  {/* Heatmap — temporarily disabled
+                  <div className="border border-ch-border rounded-xl bg-ch-gray p-4 flex flex-col flex-shrink-0" style={{ height: 200 }}>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
                         Activity by day &amp; hour (UTC)
@@ -455,29 +439,66 @@ export default function Home() {
                       </div>
                     )}
                   </div>
+                  */}
+
+                  {/* Top Contributors */}
+                  <Panel hasBorder radii="lg" padding="sm" className="flex-shrink-0" style={{ height: 200 }}>
+                    <div className="flex flex-col w-full h-full">
+                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
+                          Top Contributors
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={excludeBots}
+                            onCheckedChange={() => toggleExcludeBots()}
+                            label="Exclude bots"
+                            dir="end"
+                            orientation="horizontal"
+                          />
+                            <RowsBadge rows={contribReadRows} loading={contribState === 'loading'} />
+                          {contribSql && <SQLButton onClick={() => openSQL(contribSql)} />}
+                          {contribElapsed && <ElapsedBadge elapsed={contribElapsed} indexMode={indexMode} />}
+                        </div>
+                      </div>
+                      {contribState === 'loading' && contribData.length === 0 && (
+                        <Spinner label="Loading contributors…" />
+                      )}
+                      {contribState === 'error' && (
+                        <p className="text-red-400 text-xs py-2">Failed to load contributors — check console for details.</p>
+                      )}
+                      {contribData.length > 0 && (
+                        <div className={`flex-1 min-h-0 transition-opacity duration-200 ${contribState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                          <ContributorsChart data={contribData} />
+                        </div>
+                      )}
+                    </div>
+                  </Panel>
 
                   {/* Issues */}
-                  <div className="flex-1 border border-ch-border rounded-xl bg-ch-gray p-4 flex flex-col min-h-0">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
-                        {mode === 'issues' ? 'Top Issues' : 'Top Pull Requests'}
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        {prsState === 'done' && prsSql && (
-                          <SQLButton onClick={() => openSQL(prsSql)} />
-                        )}
-                        {prsState === 'done' && prsElapsed && (
-                          <ElapsedBadge elapsed={prsElapsed} indexMode={indexMode} />
-                        )}
+                  <Panel hasBorder radii="lg" padding="sm" className="min-h-[240px] lg:flex-1 lg:min-h-0">
+                    <div className="flex flex-col w-full h-full">
+                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
+                          {mode === 'issues' ? 'Top Issues' : 'Top Pull Requests'}
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <RowsBadge rows={prsReadRows} loading={prsState === 'loading'} />
+                          {prsSql && <SQLButton onClick={() => openSQL(prsSql)} />}
+                          {prsElapsed && <ElapsedBadge elapsed={prsElapsed} indexMode={indexMode} />}
+                        </div>
                       </div>
+                      {prsState === 'loading' && prs.length === 0 && <Spinner label="Loading issues…" />}
+                      {prsState === 'error' && (
+                        <p className="text-red-400 text-xs py-2">Failed to load issues — check console for details.</p>
+                      )}
+                      {prs.length > 0 && (
+                        <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${prsState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                          <PRList prs={prs} repo={selectedRepo!} mode={mode} />
+                        </div>
+                      )}
                     </div>
-                    {prsState === 'loading' && <Spinner label="Loading issues…" />}
-                    {prsState === 'done' && (
-                      <div className="flex-1 overflow-y-auto min-h-0">
-                        <PRList prs={prs} repo={selectedRepo!} mode={mode} />
-                      </div>
-                    )}
-                  </div>
+                  </Panel>
                 </>
               )}
             </div>
@@ -504,14 +525,9 @@ function CHLogo() {
 
 function SQLButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1 px-2 py-0.5 rounded border border-ch-border
-                 text-ch-muted hover:border-ch-yellow hover:text-ch-yellow text-xs
-                 font-mono transition-colors"
-    >
-      <span className="opacity-70">{'<'}/{'>'}</span> SQL
-    </button>
+    <Button type="secondary" onClick={onClick}>
+      {'<'}/{'>'}  SQL
+    </Button>
   )
 }
 
@@ -527,12 +543,17 @@ function Spinner({ label }: { label: string }) {
 
 function ElapsedBadge({ elapsed, indexMode }: { elapsed: string; indexMode: string }) {
   const icon  = indexMode === 'fts' ? '⚡' : indexMode === 'bloom' ? '🔍' : '🐢'
-  const color = indexMode === 'full_scan'
-    ? 'border-red-500 text-red-400 bg-[#ff000012]'
-    : 'border-ch-yellow text-ch-yellow bg-[#faff6912]'
+  const state = indexMode === 'full_scan' ? 'danger' : 'success'
   return (
-    <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${color}`}>
-      {elapsed}s {icon}
+    <Badge text={`${elapsed}s ${icon}`} state={state} size="sm" />
+  )
+}
+
+function RowsBadge({ rows, loading }: { rows: number; loading: boolean }) {
+  if (rows === 0) return null
+  return (
+    <span className={`text-xs font-mono text-ch-muted tabular-nums ${loading ? 'animate-pulse' : ''}`}>
+      {fmtRows(rows)} rows
     </span>
   )
 }

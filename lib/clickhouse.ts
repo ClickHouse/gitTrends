@@ -38,6 +38,7 @@ export function bodyCondition(term: string, op: string, mode: IndexMode): {
 
 export function indexSettings(mode: IndexMode) {
   if (mode === 'fts') return {
+    enable_parallel_replicas: 1 as const,
     enable_full_text_index: 1 as const,
     use_skip_indexes: 1 as const,
     use_query_condition_cache: 0 as const,
@@ -45,11 +46,13 @@ export function indexSettings(mode: IndexMode) {
     use_skip_indexes_on_data_read: 1 as const,
   }
   if (mode === 'bloom') return {
+    enable_parallel_replicas: 1 as const,
     enable_full_text_index: 0 as const,
     use_skip_indexes: 1 as const,
     use_query_condition_cache: 0 as const,
   }
   /* full_scan */ return {
+    enable_parallel_replicas: 1 as const,
     enable_full_text_index: 0 as const,
     use_skip_indexes: 0 as const,
     use_query_condition_cache: 0 as const,
