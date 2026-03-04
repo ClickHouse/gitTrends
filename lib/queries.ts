@@ -101,37 +101,27 @@ export function buildPrsQuery(
 ) {
   const body = bodyCondition(term, op, mode)
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
-  const outerEvent  = qmode === 'prs' ? `'PullRequestEvent'` : `'IssuesEvent'`
-  const innerEvents = qmode === 'prs'
+  const eventFilter = qmode === 'prs'
     ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
     : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
   return {
     sql: `SELECT
-  e.number,
-  any(e.title)       AS title,
-  any(e.actor_login) AS actor_login,
-  min(e.created_at)  AS created_at,
-  any(e.comments)    AS comments,
-  any(e.state)       AS state,
-  m.mentions
-FROM ${CH_DB}.${CH_TABLE} AS e
-INNER JOIN (
-  SELECT number, count() AS mentions
-  FROM ${CH_DB}.${CH_TABLE}
-  WHERE
-    repo_id = {repo_id:String}
-    AND ${innerEvents}
-    AND ${body.condition}
-    AND ${dateFilter}
-  GROUP BY number
-  ORDER BY mentions DESC
-  LIMIT 20
-) AS m ON e.number = m.number
+  number,
+  any(title)       AS title,
+  any(actor_login) AS actor_login,
+  min(created_at)  AS opened_at,
+  any(comments)    AS comments,
+  any(state)       AS state,
+  count()          AS mentions
+FROM ${CH_DB}.${CH_TABLE}
 WHERE
-  e.repo_id = {repo_id:String}
-  AND e.event_type = ${outerEvent}
-GROUP BY e.number, m.mentions
-ORDER BY m.mentions DESC`,
+  repo_id = {repo_id:String}
+  AND ${eventFilter}
+  AND ${body.condition}
+  AND ${dateFilter}
+GROUP BY number
+ORDER BY mentions DESC
+LIMIT 20`,
     params: { repo_id: repoId, ...body.params },
   }
 }

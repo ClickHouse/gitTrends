@@ -114,6 +114,7 @@ export default function Histogram({ series, granularity }: HistogramProps) {
   return (
     <ReactECharts
       option={option}
+      notMerge
       style={{ width: '100%', height: '100%' }}
       theme="dark"
     />

@@ -4,7 +4,7 @@ interface Issue {
   number: number
   title: string
   actor_login: string
-  created_at: string
+  opened_at: string
   comments: number
   state: string
   mentions: number
@@ -28,7 +28,7 @@ export default function IssueList({ prs, repo, mode }: IssueListProps) {
   return (
     <div className="flex flex-col gap-2 overflow-y-auto max-h-full pr-1">
       {prs.map((issue) => {
-        const date = new Date(issue.created_at).toLocaleDateString('en-US', {
+        const date = new Date(issue.opened_at).toLocaleDateString('en-US', {
           month: 'short',
           day: 'numeric',
           year: 'numeric',
@@ -37,7 +37,7 @@ export default function IssueList({ prs, repo, mode }: IssueListProps) {
 
         return (
           <a
-            key={`${issue.number}-${issue.created_at}`}
+            key={`${issue.number}-${issue.opened_at}`}
             href={issueUrl}
             target="_blank"
             rel="noopener noreferrer"

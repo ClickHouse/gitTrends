@@ -24,7 +24,7 @@ const DATE_RANGES = [
 interface RepoRow        { repo_name: string; repo_id: string; mentions: string }
 interface ContributorRow { actor_login: string; issues: string; prs: string; comments: string; total: string }
 interface Issue {
-  number: number; title: string; actor_login: string; created_at: string
+  number: number; title: string; actor_login: string; opened_at: string
   comments: number; state: string; mentions: number
 }
 
