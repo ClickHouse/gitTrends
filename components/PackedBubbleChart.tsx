@@ -138,9 +138,12 @@ export default function PackedBubbleChart({ data, onSelect, selectedRepo }: Prop
     const bh = maxY - minY
     const PAD = 20
 
-    // Option 3 (AmeliaBR): scale factor = average of the two fill ratios.
-    // Using min() would leave gaps; max() would overflow; average is the happy medium.
-    const sf = ((w - 2 * PAD) / bw + (h - 2 * PAD) / bh) / 2
+    // Scale to fill the bounding box, but cap so no single bubble exceeds 42% of
+    // the shorter container dimension (prevents one-bubble overflow).
+    const sfFill = ((w - 2 * PAD) / bw + (h - 2 * PAD) / bh) / 2
+    const maxNodeR = Math.max(...nodes.map(n => n.r))
+    const sfCap = maxNodeR > 0 ? (Math.min(w, h) * 0.42) / maxNodeR : Infinity
+    const sf = Math.min(sfFill, sfCap)
     const sw = bw * sf
     const sh = bh * sf
 
@@ -183,7 +186,7 @@ export default function PackedBubbleChart({ data, onSelect, selectedRepo }: Prop
               const id = `clip-${repo.repo_name.replace(/[^a-z0-9]/gi, '-')}`
               return (
                 <clipPath key={id} id={id}>
-                  <circle cx={rx} cy={ry} r={rr - 2} />
+                  <circle cx={rx} cy={ry} r={Math.max(0, rr - 2)} />
                 </clipPath>
               )
             })
@@ -231,9 +234,9 @@ export default function PackedBubbleChart({ data, onSelect, selectedRepo }: Prop
                     cx={rx}
                     cy={ry}
                     r={rr}
-                    fill={isSelected ? '#FAFF69' : hexToRgba(color, 0.25)}
+                    fill={isSelected ? hexToRgba(color, 0.45) : hexToRgba(color, 0.25)}
                     stroke={isSelected ? '#FAFF69' : hexToRgba(color, 0.7)}
-                    strokeWidth={isSelected ? 2 : 1}
+                    strokeWidth={isSelected ? 2.5 : 1}
                   />
                   {showLabel && (
                     <text
@@ -241,7 +244,7 @@ export default function PackedBubbleChart({ data, onSelect, selectedRepo }: Prop
                       y={ry}
                       textAnchor="middle"
                       dominantBaseline="middle"
-                      fill={isSelected ? '#1a1a1a' : '#e5e5e5'}
+                      fill={isSelected ? '#FAFF69' : '#e5e5e5'}
                       fontSize={Math.min(11, rr * 0.42)}
                       fontFamily="Inter, system-ui, sans-serif"
                       clipPath={`url(#${clipId})`}

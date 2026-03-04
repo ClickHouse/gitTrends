@@ -34,14 +34,12 @@ LIMIT 8`,
 }
 
 export function buildReposQuery(
-  term: string, op: string, mode: IndexMode, since: string, qmode: string, repoFilter: string[] = []
+  term: string, op: string, mode: IndexMode, since: string, repoFilter: string[] = []
 ) {
   const body = bodyCondition(term, op, mode)
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
   const rf = repoFilterClause(repoFilter)
-  const eventFilter = qmode === 'prs'
-    ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
-    : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
+  const eventFilter = `event_type IN ('IssueCommentEvent','IssuesEvent','PullRequestEvent','PullRequestReviewCommentEvent','PullRequestReviewEvent')`
   return {
     sql: `SELECT
   repo_name,
@@ -61,15 +59,13 @@ LIMIT 20`,
 }
 
 export function buildHistogramQuery(
-  term: string, op: string, mode: IndexMode, since: string, qmode: string, repoFilter: string[] = []
+  term: string, op: string, mode: IndexMode, since: string, repoFilter: string[] = []
 ) {
   const body = bodyCondition(term, op, mode)
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
   const bucketFn    = BUCKET_FN[since] ?? 'toStartOfMonth'
   const rf = repoFilterClause(repoFilter)
-  const eventFilter = qmode === 'prs'
-    ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
-    : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
+  const eventFilter = `event_type IN ('IssueCommentEvent','IssuesEvent','PullRequestEvent','PullRequestReviewCommentEvent','PullRequestReviewEvent')`
   return {
     sql: `SELECT
   ${bucketFn}(created_at) AS bucket,
@@ -112,7 +108,7 @@ WHERE
   ${botFilter}
 GROUP BY actor_login
 ORDER BY total DESC
-LIMIT 10`,
+LIMIT 8`,
     params: { repo_id: repoId, ...body.params },
   }
 }

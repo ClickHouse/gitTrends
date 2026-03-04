@@ -28,9 +28,13 @@ export default function ContributorsChart({ data }: ContributorsChartProps) {
     const prs      = sorted.map((d) => Number(d.prs))
     const comments = sorted.map((d) => Number(d.comments))
 
+    // Scale font down when there are many rows so labels don't overlap
+    const labelSize = data.length <= 6 ? 10 : 9
+    const labelWidth = data.length <= 6 ? 128 : 118
+
     return {
       backgroundColor: 'transparent',
-      grid: { left: 130, right: 16, top: 4, bottom: 20 },
+      grid: { left: labelWidth + 12, right: 16, top: 4, bottom: 20 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
@@ -60,11 +64,11 @@ export default function ContributorsChart({ data }: ContributorsChartProps) {
         data: names,
         axisLabel: {
           color: '#ccc',
-          fontSize: 11,
+          fontSize: labelSize,
           fontFamily: FONT,
-          interval: 0,        // force all labels to render
+          interval: 0,
           overflow: 'truncate',
-          width: 118,
+          width: labelWidth,
         },
         axisLine: { lineStyle: { color: '#2a2a2a' } },
         axisTick: { show: false },
@@ -75,7 +79,7 @@ export default function ContributorsChart({ data }: ContributorsChartProps) {
           type: 'bar',
           stack: 'total',
           data: issues,
-          itemStyle: { color: '#4ade80' },
+          itemStyle: { color: '#FAFF69' },
           emphasis: { focus: 'series' },
         },
         {
@@ -83,7 +87,7 @@ export default function ContributorsChart({ data }: ContributorsChartProps) {
           type: 'bar',
           stack: 'total',
           data: prs,
-          itemStyle: { color: '#FAFF69' },
+          itemStyle: { color: '#4ade80' },
           emphasis: { focus: 'series' },
         },
         {

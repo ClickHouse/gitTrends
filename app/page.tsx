@@ -30,230 +30,265 @@ interface Issue {
 
 type LoadState = 'idle' | 'loading' | 'done' | 'error'
 
+interface TermData {
+  repos: RepoRow[]
+  reposState: LoadState
+  reposElapsed: string | null
+  reposSql: string | null
+  reposReadRows: number
+  reposError: string | null
+  selectedRepo: string | null
+  repoContext: { repoId: string; op: string; indexMode: IndexMode; since: string } | null
+  contribData: ContributorRow[]
+  contribState: LoadState
+  contribElapsed: string | null
+  contribSql: string | null
+  contribReadRows: number
+  issuesData: Issue[]
+  issuesState: LoadState
+  issuesElapsed: string | null
+  issuesSql: string | null
+  issuesReadRows: number
+  prsData: Issue[]
+  prsState: LoadState
+  prsElapsed: string | null
+  prsSql: string | null
+  prsReadRows: number
+  detailTab: 'issues' | 'prs'
+}
+
+interface HistTermState {
+  data: { bucket: string; count: string }[]
+  state: LoadState
+  elapsed: string | null
+  sql: string | null
+  readRows: number
+}
+
+const emptyTermData = (): TermData => ({
+  repos: [], reposState: 'idle', reposElapsed: null, reposSql: null, reposReadRows: 0, reposError: null,
+  selectedRepo: null, repoContext: null,
+  contribData: [], contribState: 'idle', contribElapsed: null, contribSql: null, contribReadRows: 0,
+  issuesData: [], issuesState: 'idle', issuesElapsed: null, issuesSql: null, issuesReadRows: 0,
+  prsData: [], prsState: 'idle', prsElapsed: null, prsSql: null, prsReadRows: 0,
+  detailTab: 'issues',
+})
+
+const emptyHistState = (): HistTermState => ({
+  data: [], state: 'idle', elapsed: null, sql: null, readRows: 0,
+})
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [term,     setTerm]     = useState('')
-  const [indexMode, setIndexMode] = useState<IndexMode>('fts')
-  const [since,    setSince]    = useState('1M')
-  const [mode,     setMode]     = useState<'issues' | 'prs'>('issues')
-  const [op,       setOp]       = useState<'any' | 'all'>('all')
-
-  const [repos,        setRepos]        = useState<RepoRow[]>([])
-  const [reposState,   setReposState]   = useState<LoadState>('idle')
-  const [reposElapsed, setReposElapsed] = useState<string | null>(null)
-  const [reposError,   setReposError]   = useState<string | null>(null)
-  const [reposSql,     setReposSql]     = useState<string | null>(null)
-  const [reposReadRows, setReposReadRows] = useState(0)
-
-  const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
-
-  const [contribData,    setContribData]    = useState<ContributorRow[]>([])
-  const [contribState,   setContribState]   = useState<LoadState>('idle')
-  const [contribElapsed, setContribElapsed] = useState<string | null>(null)
-  const [contribSql,     setContribSql]     = useState<string | null>(null)
-  const [contribReadRows, setContribReadRows] = useState(0)
-  const [excludeBots,    setExcludeBots]    = useState(true)
-
-  const [prs,        setPrs]        = useState<Issue[]>([])
-  const [prsState,   setPrsState]   = useState<LoadState>('idle')
-  const [prsElapsed, setPrsElapsed] = useState<string | null>(null)
-  const [prsSql,     setPrsSql]     = useState<string | null>(null)
-  const [prsReadRows, setPrsReadRows] = useState(0)
-
-  const [histData,        setHistData]        = useState<{ bucket: string; count: string }[]>([])
-  const [histState,       setHistState]       = useState<LoadState>('idle')
-  const [histElapsed,     setHistElapsed]     = useState<string | null>(null)
-  const [histSql,         setHistSql]         = useState<string | null>(null)
-  const [histReadRows,    setHistReadRows]    = useState(0)
+  // Multi-term state
+  const [terms, setTerms] = useState<string[]>([])
+  const [termInput, setTermInput] = useState('')
+  const [activeTermIdx, setActiveTermIdx] = useState(0)
+  const [termData, setTermData] = useState<Record<string, TermData>>({})
+  const [histByTerm, setHistByTerm] = useState<Record<string, HistTermState>>({})
   const [histGranularity, setHistGranularity] = useState('toStartOfDay')
+  const [histHeight, setHistHeight] = useState(260)
+  const histDragRef = useRef<{ startY: number; startH: number } | null>(null)
+  useEffect(() => {
+    setHistHeight(Math.max(160, Math.min(500, Math.round(window.innerHeight * 0.28))))
+  }, [])
 
-  const [compareTerms,   setCompareTerms]   = useState<string[]>([])
-  const [compareInput,   setCompareInput]   = useState('')
-  const [compareData,    setCompareData]    = useState<Record<string, { bucket: string; count: string }[]>>({})
-  const [compareLoading, setCompareLoading] = useState<Record<string, boolean>>({})
-  const compareTermsRef = useRef<string[]>([])
+  // Global settings
+  const [indexMode, setIndexMode] = useState<IndexMode>('fts')
+  const [since, setSince] = useState('1M')
+  const [op, setOp] = useState<'any' | 'all'>('all')
+  const [excludeBots, setExcludeBots] = useState(true)
 
-  const [repoFilter,             setRepoFilter]             = useState<string[]>([])
-  const [repoFilterInput,        setRepoFilterInput]        = useState('')
-  const [repoSuggestions,        setRepoSuggestions]        = useState<string[]>([])
+  // Repo filter
+  const [repoFilter, setRepoFilter] = useState<string[]>([])
+  const [repoFilterInput, setRepoFilterInput] = useState('')
+  const [repoSuggestions, setRepoSuggestions] = useState<string[]>([])
   const [repoSuggestionsLoading, setRepoSuggestionsLoading] = useState(false)
+
+  const abortRefs = useRef<Record<string, AbortController>>({})
+  const termsRef = useRef<string[]>([])
+  useEffect(() => { termsRef.current = terms }, [terms])
 
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
     window.open(`https://sql.clickhouse.com/?query=${encodeURIComponent(encoded)}`, '_blank')
   }, [])
 
-  // Fetch histogram for a single compare term (all settings passed as params to avoid stale closures)
-  const fetchCompareHist = useCallback(async (
-    ct: string, currentOp: string, currentIndexMode: IndexMode, currentSince: string, currentMode: string, currentRepoFilter: string[]
-  ) => {
-    setCompareLoading((prev) => ({ ...prev, [ct]: true }))
-    try {
-      const q = buildHistogramQuery(ct, currentOp, currentIndexMode, currentSince, currentMode, currentRepoFilter)
-      const { rows } = await chStream<{ bucket: string; count: string }>(q.sql, q.params, currentIndexMode, () => {})
-      setCompareData((prev) => ({ ...prev, [ct]: rows }))
-    } catch { /* ignore */ }
-    setCompareLoading((prev) => ({ ...prev, [ct]: false }))
-  }, [])
+  // Stable state updaters
+  const updateTerm = useCallback((t: string, patch: Partial<TermData>) =>
+    setTermData(prev => ({ ...prev, [t]: { ...(prev[t] ?? emptyTermData()), ...patch } })), [])
 
-  const addCompareTerm = useCallback((ct: string) => {
-    const t = ct.trim()
-    if (!t || compareTermsRef.current.includes(t) || compareTermsRef.current.length >= 4) return
-    const next = [...compareTermsRef.current, t]
-    compareTermsRef.current = next
-    setCompareTerms(next)
-    setCompareInput('')
-    fetchCompareHist(t, op, indexMode, since, mode, repoFilter)
-  }, [op, indexMode, since, mode, fetchCompareHist, repoFilter])
-
-  const removeCompareTerm = useCallback((ct: string) => {
-    const next = compareTermsRef.current.filter((x) => x !== ct)
-    compareTermsRef.current = next
-    setCompareTerms(next)
-    setCompareData((prev) => { const d = { ...prev }; delete d[ct]; return d })
-  }, [])
-
-  const abortRef      = useRef<AbortController | null>(null)
-  const repoContextRef = useRef<{ term: string; repoId: string; op: string; indexMode: IndexMode; since: string; mode: string } | null>(null)
-
-  const search = useCallback(
-    async (searchTerm: string) => {
-      const t = searchTerm.trim()
-      if (!t) return
-
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      const signal = controller.signal
-
-      setSelectedRepo(null)
-      setPrs([])
-      setPrsState('idle')
-      setPrsSql(null)
-      setReposState('loading')
-      setReposElapsed(null)
-      setReposError(null)
-      setReposSql(null)
-      setReposReadRows(0)
-      setHistState('loading')
-      setHistReadRows(0)
-      setContribState('idle')
-      setContribData([])
-      setContribElapsed(null)
-      setContribSql(null)
-
-      const isAbort = (e: unknown) => (e as Error).name === 'AbortError'
-
-      const reposQ = buildReposQuery(t, op, indexMode, since, mode, repoFilter)
-      chStream<RepoRow>(reposQ.sql, reposQ.params, indexMode, (p) => setReposReadRows(p.readRows), signal)
-        .then(({ rows, elapsed, sql }) => {
-          setReposSql(sql); setRepos(rows); setReposElapsed(elapsed); setReposState('done')
-        })
-        .catch((e) => { if (!isAbort(e)) { setReposError(e.message); setReposState('error') } })
-
-      const histQ = buildHistogramQuery(t, op, indexMode, since, mode, repoFilter)
-      chStream<{ bucket: string; count: string }>(histQ.sql, histQ.params, indexMode, (p) => setHistReadRows(p.readRows), signal)
-        .then(({ rows, elapsed, sql }) => {
-          setHistSql(sql); setHistData(rows); setHistElapsed(elapsed)
-          setHistGranularity(histQ.granularity); setHistState('done')
-        })
-        .catch((e) => { if (!isAbort(e)) setHistState('error') })
-
-      for (const ct of compareTermsRef.current) {
-        fetchCompareHist(ct, op, indexMode, since, mode, repoFilter)
-      }
-    },
-    [indexMode, since, mode, op, fetchCompareHist, repoFilter]
-  )
+  const updateHist = useCallback((t: string, patch: Partial<HistTermState>) =>
+    setHistByTerm(prev => ({ ...prev, [t]: { ...(prev[t] ?? emptyHistState()), ...patch } })), [])
 
   const fetchContributors = useCallback(async (
-    ctx: NonNullable<typeof repoContextRef.current>, tryExcludeBots: boolean
+    term: string,
+    ctx: { repoId: string; op: string; indexMode: IndexMode; since: string },
+    tryExcludeBots: boolean,
+    onFallback?: (newVal: boolean) => void,
   ) => {
-    setContribState('loading')
-    setContribReadRows(0)
+    updateTerm(term, { contribState: 'loading', contribReadRows: 0 })
     try {
-      const q = buildContributorsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, tryExcludeBots)
-      const res = await chStream<ContributorRow>(q.sql, q.params, ctx.indexMode, (p) => setContribReadRows(p.readRows))
+      const q = buildContributorsQuery(term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, tryExcludeBots)
+      const res = await chStream<ContributorRow>(q.sql, q.params, ctx.indexMode, (p) =>
+        updateTerm(term, { contribReadRows: p.readRows }))
       if (res.rows.length === 0 && tryExcludeBots) {
-        // no humans — fall back to including bots
-        setExcludeBots(false)
-        const q2 = buildContributorsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, false)
-        const res2 = await chStream<ContributorRow>(q2.sql, q2.params, ctx.indexMode, (p) => setContribReadRows(p.readRows))
-        setContribSql(res2.sql); setContribData(res2.rows); setContribElapsed(res2.elapsed)
+        onFallback?.(false)
+        const q2 = buildContributorsQuery(term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, false)
+        const res2 = await chStream<ContributorRow>(q2.sql, q2.params, ctx.indexMode, (p) =>
+          updateTerm(term, { contribReadRows: p.readRows }))
+        updateTerm(term, { contribSql: res2.sql, contribData: res2.rows, contribElapsed: res2.elapsed, contribState: 'done' })
       } else {
-        setExcludeBots(tryExcludeBots)
-        setContribSql(res.sql); setContribData(res.rows); setContribElapsed(res.elapsed)
+        updateTerm(term, { contribSql: res.sql, contribData: res.rows, contribElapsed: res.elapsed, contribState: 'done' })
       }
-      setContribState('done')
-    } catch (e) { console.error('Contributors query failed:', e); setContribState('error') }
+    } catch (e) { console.error('Contributors query failed:', e); updateTerm(term, { contribState: 'error' }) }
+  }, [updateTerm])
+
+  const selectRepo = useCallback((term: string, repoName: string) => {
+    const td = termData[term]
+    if (!td) return
+    const repoId = td.repos.find(r => r.repo_name === repoName)?.repo_id
+    if (!repoId) return
+
+    const ctx = { repoId, op, indexMode, since }
+    updateTerm(term, {
+      selectedRepo: repoName, repoContext: ctx,
+      issuesData: [], issuesState: 'loading', issuesElapsed: null, issuesSql: null, issuesReadRows: 0,
+      prsData: [], prsState: 'loading', prsElapsed: null, prsSql: null, prsReadRows: 0,
+      contribData: [], contribState: 'loading', contribElapsed: null, contribSql: null, contribReadRows: 0,
+    })
+
+    const issuesQ = buildPrsQuery(term, op, indexMode, since, repoId, 'issues')
+    chStream<Issue>(issuesQ.sql, issuesQ.params, indexMode, (p) =>
+      updateTerm(term, { issuesReadRows: p.readRows }))
+      .then(({ rows, elapsed, sql }) =>
+        updateTerm(term, { issuesSql: sql, issuesData: rows, issuesElapsed: elapsed, issuesState: 'done' }))
+      .catch((e) => { console.error('Issues query failed:', e); updateTerm(term, { issuesState: 'error' }) })
+
+    const prsQ = buildPrsQuery(term, op, indexMode, since, repoId, 'prs')
+    chStream<Issue>(prsQ.sql, prsQ.params, indexMode, (p) =>
+      updateTerm(term, { prsReadRows: p.readRows }))
+      .then(({ rows, elapsed, sql }) =>
+        updateTerm(term, { prsSql: sql, prsData: rows, prsElapsed: elapsed, prsState: 'done' }))
+      .catch((e) => { console.error('PRs query failed:', e); updateTerm(term, { prsState: 'error' }) })
+
+    fetchContributors(term, ctx, excludeBots, (newVal) => setExcludeBots(newVal))
+  }, [termData, op, indexMode, since, excludeBots, updateTerm, fetchContributors])
+
+  const searchTerm = useCallback((
+    t: string, currentOp: string, currentIndexMode: IndexMode, currentSince: string, currentRepoFilter: string[]
+  ) => {
+    abortRefs.current[t]?.abort()
+    const controller = new AbortController()
+    abortRefs.current[t] = controller
+    const signal = controller.signal
+
+    updateTerm(t, {
+      repos: [], reposState: 'loading', reposElapsed: null, reposError: null, reposSql: null, reposReadRows: 0,
+      selectedRepo: null, repoContext: null,
+      contribData: [], contribState: 'idle', contribElapsed: null, contribSql: null, contribReadRows: 0,
+      issuesData: [], issuesState: 'idle', issuesElapsed: null, issuesSql: null, issuesReadRows: 0,
+      prsData: [], prsState: 'idle', prsElapsed: null, prsSql: null, prsReadRows: 0,
+    })
+    updateHist(t, { data: [], state: 'loading', elapsed: null, sql: null, readRows: 0 })
+
+    const isAbort = (e: unknown) => (e as Error).name === 'AbortError'
+
+    const reposQ = buildReposQuery(t, currentOp, currentIndexMode, currentSince, currentRepoFilter)
+    chStream<RepoRow>(reposQ.sql, reposQ.params, currentIndexMode, (p) =>
+      updateTerm(t, { reposReadRows: p.readRows }), signal)
+      .then(({ rows, elapsed, sql }) =>
+        updateTerm(t, { reposSql: sql, repos: rows, reposElapsed: elapsed, reposState: 'done' }))
+      .catch((e) => { if (!isAbort(e)) updateTerm(t, { reposError: e.message, reposState: 'error' }) })
+
+    const histQ = buildHistogramQuery(t, currentOp, currentIndexMode, currentSince, currentRepoFilter)
+    chStream<{ bucket: string; count: string }>(histQ.sql, histQ.params, currentIndexMode, (p) =>
+      updateHist(t, { readRows: p.readRows }), signal)
+      .then(({ rows, elapsed, sql }) => {
+        updateHist(t, { sql, data: rows, elapsed, state: 'done' })
+        setHistGranularity(histQ.granularity)
+      })
+      .catch((e) => { if (!isAbort(e)) updateHist(t, { state: 'error' }) })
+  }, [updateTerm, updateHist])
+
+  const addTerm = useCallback((t: string) => {
+    const trimmed = t.trim()
+    if (!trimmed || terms.includes(trimmed) || terms.length >= 4) return
+    const nextTerms = [...terms, trimmed]
+    setTerms(nextTerms)
+    setActiveTermIdx(nextTerms.length - 1)
+    setTermInput('')
+    searchTerm(trimmed, op, indexMode, since, repoFilter)
+  }, [terms, op, indexMode, since, repoFilter, searchTerm])
+
+  const removeTerm = useCallback((t: string) => {
+    const currentTerms = termsRef.current
+    const idx = currentTerms.indexOf(t)
+    setTerms(prev => prev.filter(x => x !== t))
+    if (idx !== -1) {
+      setActiveTermIdx(prev => {
+        if (prev < idx) return prev
+        if (prev > idx) return prev - 1
+        // prev === idx: active tab removed → go to same position or clamp
+        return Math.min(prev, Math.max(0, currentTerms.length - 2))
+      })
+    }
+    setTermData(prev => { const d = { ...prev }; delete d[t]; return d })
+    setHistByTerm(prev => { const d = { ...prev }; delete d[t]; return d })
+    abortRefs.current[t]?.abort()
+    delete abortRefs.current[t]
   }, [])
-
-  const selectRepo = useCallback(
-    (repoName: string) => {
-      if (!term.trim()) return
-      const repoId = repos.find((r) => r.repo_name === repoName)?.repo_id
-      if (!repoId) return
-
-      const ctx = { term: term.trim(), repoId, op, indexMode, since, mode }
-      repoContextRef.current = ctx
-
-      setSelectedRepo(repoName)
-      setPrsState('loading')
-      setContribState('loading')
-      setPrsElapsed(null)
-      setContribElapsed(null)
-      setContribData([])
-      setPrsReadRows(0)
-
-      const prsQ = buildPrsQuery(ctx.term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, ctx.mode)
-      chStream<Issue>(prsQ.sql, prsQ.params, ctx.indexMode, (p) => setPrsReadRows(p.readRows))
-        .then(({ rows, elapsed, sql }) => {
-          setPrsSql(sql); setPrs(rows); setPrsElapsed(elapsed); setPrsState('done')
-        })
-        .catch((e) => { console.error('Issues/PRs query failed:', e); setPrsState('error') })
-
-      fetchContributors(ctx, true)
-    },
-    [term, repos, op, indexMode, since, mode, fetchContributors]
-  )
 
   const toggleExcludeBots = useCallback(() => {
-    if (repoContextRef.current) fetchContributors(repoContextRef.current, !excludeBots)
-  }, [excludeBots, fetchContributors])
+    const newExclude = !excludeBots
+    setExcludeBots(newExclude)
+    const t = termsRef.current[activeTermIdx]
+    if (!t) return
+    setTermData(prev => {
+      const ctx = prev[t]?.repoContext
+      if (ctx) fetchContributors(t, ctx, newExclude)
+      return prev
+    })
+  }, [excludeBots, activeTermIdx, fetchContributors])
 
   const resetAll = useCallback(() => {
-    abortRef.current?.abort()
-    setTerm('')
-    setRepos([])
-    setReposState('idle')
-    setReposElapsed(null)
-    setReposError(null)
-    setReposSql(null)
-    setReposReadRows(0)
-    setSelectedRepo(null)
-    setPrs([])
-    setPrsState('idle')
-    setPrsElapsed(null)
-    setPrsSql(null)
-    setPrsReadRows(0)
-    setHistData([])
-    setHistState('idle')
-    setHistElapsed(null)
-    setHistSql(null)
-    setHistReadRows(0)
-    setContribData([])
-    setContribState('idle')
-    setContribElapsed(null)
-    setContribSql(null)
-    setContribReadRows(0)
+    Object.values(abortRefs.current).forEach(ctrl => ctrl.abort())
+    abortRefs.current = {}
+    setTerms([])
+    setTermInput('')
+    setActiveTermIdx(0)
+    setTermData({})
+    setHistByTerm({})
   }, [])
 
-  useEffect(() => {
-    if (repos.length > 0 || reposState === 'loading') search(term)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indexMode, since, mode, op, repoFilter])
+  const onHistDragStart = useCallback((e: React.MouseEvent) => {
+    histDragRef.current = { startY: e.clientY, startH: histHeight }
+    const onMove = (ev: MouseEvent) => {
+      if (!histDragRef.current) return
+      const delta = ev.clientY - histDragRef.current.startY
+      setHistHeight(Math.max(140, Math.min(600, histDragRef.current.startH + delta)))
+    }
+    const onUp = () => {
+      histDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [histHeight])
 
+  // Re-search all terms when global settings change
+  useEffect(() => {
+    if (termsRef.current.length > 0) {
+      for (const t of termsRef.current) {
+        searchTerm(t, op, indexMode, since, repoFilter)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexMode, since, op, repoFilter])
+
+  // Repo filter suggestions
   useEffect(() => {
     if (repoFilterInput.trim().length < 2) { setRepoSuggestions([]); return }
     const timer = setTimeout(async () => {
@@ -268,6 +303,11 @@ export default function Home() {
     return () => clearTimeout(timer)
   }, [repoFilterInput, repoFilter])
 
+  // Derived active term data
+  const activeTerm = terms[activeTermIdx] ?? terms[0]
+  const atd = activeTerm ? (termData[activeTerm] ?? emptyTermData()) : null
+  const activeTermRepos = atd?.repos ?? []
+  const primaryHist = terms[0] ? (histByTerm[terms[0]] ?? emptyHistState()) : null
 
   return (
     <div className="min-h-screen lg:h-screen flex flex-col bg-ch-dark text-white overflow-auto lg:overflow-hidden">
@@ -277,11 +317,10 @@ export default function Home() {
         <div className="flex items-center gap-3">
           <a href="/" onClick={(e) => { e.preventDefault(); resetAll() }} className="flex items-center gap-3 cursor-pointer">
             <CHLogo />
-         
-          <span className="font-semibold text-lg tracking-tight">
-            Git<span className="text-ch-yellow">Search</span>
-          </span>
-           </a>
+            <span className="font-semibold text-lg tracking-tight">
+              Git<span className="text-ch-yellow">Search</span>
+            </span>
+          </a>
           <span className="text-ch-muted text-sm hidden sm:block">· Full-Text Search Demo</span>
         </div>
 
@@ -305,20 +344,121 @@ export default function Home() {
       </header>
 
       {/* ─── Search bar ──────────────────────────────────────────────────── */}
-      <div className="px-6 pt-8 pb-4">
-        <div className="max-w-2xl mx-auto">
-          <p className="text-center text-ch-muted text-sm mb-4">
-            Search 10B+ GitHub events by technology, topic, or keyword
-          </p>
-
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); search(term) }}>
-            <input
-              className="flex-1 bg-ch-gray border border-ch-border rounded-lg px-4 py-2 text-sm text-white placeholder-ch-muted outline-none focus:border-ch-yellow transition-colors"
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              placeholder="clickhouse, iceberg, vector..."
-              autoFocus
+      {terms.length === 0 ? (
+        /* ── Landing layout ─────────────────────────────────────────────── */
+        <div className="px-6 pt-8 pb-4 flex-shrink-0">
+          <div className="max-w-2xl mx-auto">
+            <p className="text-center text-ch-muted text-sm mb-4">
+              Search 10B+ GitHub events by technology, topic, or keyword
+            </p>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => { e.preventDefault(); if (termInput.trim()) addTerm(termInput) }}
+            >
+              <div className="flex-1 flex flex-wrap items-center gap-1.5 bg-ch-gray border border-ch-border rounded-lg px-3 py-1.5 focus-within:border-ch-yellow transition-colors min-w-0">
+                <input
+                  className="flex-1 min-w-[120px] bg-transparent text-sm text-white placeholder-ch-muted outline-none py-0.5"
+                  value={termInput}
+                  onChange={(e) => setTermInput(e.target.value)}
+                  placeholder="clickhouse, iceberg, vector..."
+                  autoFocus
+                />
+              </div>
+              <RepoFilter
+                selected={repoFilter}
+                input={repoFilterInput}
+                onInputChange={setRepoFilterInput}
+                suggestions={
+                  repoFilterInput.length >= 2
+                    ? repoSuggestions
+                    : activeTermRepos.map((r) => r.repo_name).filter((r) => !repoFilter.includes(r)).slice(0, 8)
+                }
+                suggestionsLoading={repoSuggestionsLoading}
+                onAdd={(repo) => setRepoFilter((prev) => prev.includes(repo) ? prev : [...prev, repo])}
+                onRemove={(repo) => setRepoFilter((prev) => prev.filter((r) => r !== repo))}
+              />
+              <button
+                type="submit"
+                disabled={!termInput.trim()}
+                className="px-4 py-2 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
+              >
+                Search
+              </button>
+            </form>
+            <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <ButtonGroup
+                  options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+                  selected={since}
+                  onClick={setSince}
+                />
+                <span className="text-ch-border">|</span>
+                <ButtonGroup
+                  options={[
+                    { value: 'all', label: 'AND' },
+                    { value: 'any', label: 'OR'  },
+                  ]}
+                  selected={op}
+                  onClick={(v) => setOp(v as 'any' | 'all')}
+                />
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {SUGGESTIONS.map((s) => (
+                  <Button key={s} type="secondary" onClick={() => addTerm(s)}>{s}</Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ── Compact layout when search is active ───────────────────────── */
+        <div className="px-6 py-3 flex-shrink-0">
+          <form
+            className="flex items-center gap-2 flex-wrap"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (termInput.trim()) {
+                addTerm(termInput)
+              } else {
+                for (const t of terms) searchTerm(t, op, indexMode, since, repoFilter)
+              }
+            }}
+          >
+            <ButtonGroup
+              options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+              selected={since}
+              onClick={setSince}
             />
+            <span className="text-ch-border">|</span>
+            <ButtonGroup
+              options={[
+                { value: 'all', label: 'AND' },
+                { value: 'any', label: 'OR'  },
+              ]}
+              selected={op}
+              onClick={(v) => setOp(v as 'any' | 'all')}
+            />
+            <span className="text-ch-border">|</span>
+            <div className="flex-1 flex flex-wrap items-center gap-1.5 bg-ch-gray border border-ch-border rounded-lg px-3 py-1.5 focus-within:border-ch-yellow transition-colors min-w-[180px]">
+              {terms.map((t, i) => (
+                <span
+                  key={t}
+                  className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border flex-shrink-0"
+                  style={{ borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length] }}
+                >
+                  {t}
+                  <button type="button" onClick={() => removeTerm(t)} className="opacity-50 hover:opacity-100 leading-none ml-0.5">×</button>
+                </span>
+              ))}
+              <input
+                className="flex-1 min-w-[100px] bg-transparent text-sm text-white placeholder-ch-muted outline-none py-0.5"
+                value={termInput}
+                onChange={(e) => setTermInput(e.target.value)}
+                placeholder={terms.length < 4 ? 'Add another term…' : ''}
+                autoFocus
+                disabled={terms.length >= 4}
+              />
+            </div>
             <RepoFilter
               selected={repoFilter}
               input={repoFilterInput}
@@ -326,7 +466,7 @@ export default function Home() {
               suggestions={
                 repoFilterInput.length >= 2
                   ? repoSuggestions
-                  : repos.map((r) => r.repo_name).filter((r) => !repoFilter.includes(r)).slice(0, 8)
+                  : activeTermRepos.map((r) => r.repo_name).filter((r) => !repoFilter.includes(r)).slice(0, 8)
               }
               suggestionsLoading={repoSuggestionsLoading}
               onAdd={(repo) => setRepoFilter((prev) => prev.includes(repo) ? prev : [...prev, repo])}
@@ -334,60 +474,17 @@ export default function Home() {
             />
             <button
               type="submit"
-              disabled={reposState === 'loading'}
               className="px-4 py-2 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
             >
-              {reposState === 'loading' ? 'Searching…' : 'Search'}
+              {terms.some(t => termData[t]?.reposState === 'loading') ? 'Searching…' : 'Search'}
             </button>
           </form>
-
-          <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <ButtonGroup
-                options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
-                selected={since}
-                onClick={setSince}
-              />
-              <span className="text-ch-border">|</span>
-              <ButtonGroup
-                options={[
-                  { value: 'issues', label: 'Issues' },
-                  { value: 'prs',    label: 'Pull Requests' },
-                ]}
-                selected={mode}
-                onClick={(v) => setMode(v as 'issues' | 'prs')}
-              />
-              <span className="text-ch-border">|</span>
-              <ButtonGroup
-                options={[
-                  { value: 'all', label: 'AND' },
-                  { value: 'any', label: 'OR'  },
-                ]}
-                selected={op}
-                onClick={(v) => setOp(v as 'any' | 'all')}
-              />
-            </div>
-
-            {repos.length === 0 && reposState === 'idle' && (
-              <div className="flex flex-wrap gap-1">
-                {SUGGESTIONS.map((s) => (
-                  <Button
-                    key={s}
-                    type="secondary"
-                    onClick={() => { setTerm(s); search(s) }}
-                  >
-                    {s}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
-      </div>
+      )}
 
       {/* ─── Histogram ───────────────────────────────────────────────────── */}
-      {histState !== 'idle' && (
-        <div className="px-6 pb-3 flex-shrink-0" style={{ height: 210 }}>
+      {primaryHist && primaryHist.state !== 'idle' && (<>
+        <div className="px-6 pb-0 flex-shrink-0" style={{ height: histHeight }}>
           <Panel hasBorder radii="lg" padding="sm" className="h-full">
             <div className="flex flex-col w-full h-full">
               <div className="flex items-center justify-between flex-shrink-0 mb-1">
@@ -398,45 +495,17 @@ export default function Home() {
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
-                  <SQLButton onClick={() => histSql && openSQL(histSql)} visible={!!histSql && histState !== 'loading'} />
-                  <RowsBadge rows={histReadRows} loading={histState === 'loading'} />
-                  <LiveElapsedBadge elapsed={histElapsed} loading={histState === 'loading'} indexMode={indexMode} />
+                  <SQLButton onClick={() => primaryHist.sql && openSQL(primaryHist.sql)} visible={!!primaryHist.sql && primaryHist.state !== 'loading'} />
+                  <RowsBadge rows={primaryHist.readRows} loading={primaryHist.state === 'loading'} />
+                  <LiveElapsedBadge elapsed={primaryHist.elapsed} loading={primaryHist.state === 'loading'} indexMode={indexMode} />
                 </div>
               </div>
 
-              {/* Compare term chips + add input */}
-              <div className="flex items-center gap-1.5 flex-wrap flex-shrink-0 mb-1 min-h-[24px]">
-                {compareTerms.map((ct, i) => (
-                  <span
-                    key={ct}
-                    className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
-                    style={{ borderColor: SERIES_COLORS[i + 1], color: SERIES_COLORS[i + 1] }}
-                  >
-                    {compareLoading[ct] && <span className="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style={{ background: SERIES_COLORS[i + 1] }} />}
-                    {ct}
-                    <button onClick={() => removeCompareTerm(ct)} className="opacity-50 hover:opacity-100 leading-none ml-0.5">×</button>
-                  </span>
-                ))}
-                {compareTerms.length < 4 && (
-                  <form onSubmit={(e) => { e.preventDefault(); addCompareTerm(compareInput) }}>
-                    <input
-                      value={compareInput}
-                      onChange={(e) => setCompareInput(e.target.value)}
-                      placeholder="+ compare term"
-                      className="text-xs bg-ch-dark border border-dashed border-[#555] hover:border-[#888] focus:border-ch-yellow rounded px-2 py-0.5 outline-none text-white/60 placeholder-[#666] focus:text-white w-28 transition-colors"
-                    />
-                  </form>
-                )}
-              </div>
-
-              {histState === 'loading' && histData.length === 0 && <Spinner label="Loading…" />}
-              {histData.length > 0 && (
-                <div className={`flex-1 min-h-0 transition-opacity duration-200 ${histState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+              {primaryHist.state === 'loading' && primaryHist.data.length === 0 && <Spinner label="Loading…" />}
+              {terms.some(t => (histByTerm[t]?.data.length ?? 0) > 0) && (
+                <div className={`flex-1 min-h-0 transition-opacity duration-200 ${primaryHist.state === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
                   <Histogram
-                    series={[
-                      { term, data: histData },
-                      ...compareTerms.map((ct) => ({ term: ct, data: compareData[ct] ?? [] })),
-                    ] satisfies HistSeries[]}
+                    series={terms.map(t => ({ term: t, data: histByTerm[t]?.data ?? [] })) satisfies HistSeries[]}
                     granularity={histGranularity}
                   />
                 </div>
@@ -444,145 +513,224 @@ export default function Home() {
             </div>
           </Panel>
         </div>
-      )}
+
+        {/* Drag handle */}
+        <div
+          className="px-6 flex-shrink-0 flex items-center justify-center h-4 cursor-ns-resize group select-none"
+          onMouseDown={onHistDragStart}
+        >
+          <div className="w-16 h-1 rounded-full bg-ch-border group-hover:bg-ch-yellow transition-colors duration-150" />
+        </div>
+      </>)}
 
       {/* ─── Results ─────────────────────────────────────────────────────── */}
-      <div className="lg:flex-1 flex flex-col lg:flex-row gap-4 px-6 pb-6 lg:min-h-0">
+      <div className="lg:flex-1 flex flex-col px-6 pb-6 lg:min-h-0">
 
-        {reposState === 'idle' ? (
-          /* Empty hero */
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 py-16 opacity-60">
-            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-              <rect width="7" height="48" rx="3.5" fill="#FAFF69" />
-              <rect x="10" width="7" height="48" rx="3.5" fill="#FAFF69" />
-              <rect x="20" width="7" height="34" rx="3.5" fill="#FAFF69" />
-              <rect x="30" width="7" height="48" rx="3.5" fill="#FAFF69" />
-              <rect x="40" width="7" height="26" rx="3.5" fill="#FAFF69" />
-            </svg>
-            <p className="text-ch-muted text-sm max-w-sm">
-              Full-text search across <span className="text-white font-mono">10B+</span> GitHub
-              events powered by ClickHouse.
-              <br /><br />
-              Toggle between Full-Text Search, Bloom filter or Full scan to compare performances.
-            </p>
+        {/* Term tabs */}
+        {terms.length > 1 && (
+          <div className="flex gap-1 mb-3 flex-shrink-0">
+            {terms.map((t, i) => (
+              <button
+                key={t}
+                onClick={() => setActiveTermIdx(i)}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors border ${
+                  i === activeTermIdx
+                    ? 'font-semibold'
+                    : 'border-transparent text-ch-muted hover:text-white'
+                }`}
+                style={i === activeTermIdx
+                  ? { borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length], background: SERIES_COLORS[i % SERIES_COLORS.length] + '18' }
+                  : {}}
+              >
+                {t}
+              </button>
+            ))}
           </div>
-        ) : (
-          <>
-            {/* ── Left: bubble chart ───────────────────────────────────────── */}
-            <div className="flex flex-col lg:flex-1 min-h-[380px] lg:min-h-0">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-semibold text-white">
-                  Top Repos
-                  <span className="text-ch-muted font-normal">
-                    {' '}·{' '}{DATE_RANGES.find((r) => r.value === since)?.label}
-                  </span>
-                </h2>
-                <div className="flex items-center gap-2">
-                  <SQLButton onClick={() => reposSql && openSQL(reposSql)} visible={!!reposSql} />
-                  <RowsBadge rows={reposReadRows} loading={reposState === 'loading'} />
-                  <LiveElapsedBadge elapsed={reposElapsed} loading={reposState === 'loading'} indexMode={indexMode} />
-                </div>
-              </div>
-
-              {reposState === 'loading' && repos.length === 0 && (
-                <div className="flex-1 flex items-center justify-center">
-                  <Spinner label="Scanning GitHub events…" />
-                </div>
-              )}
-              {reposState === 'error'   && <p className="text-red-400 text-sm">{reposError}</p>}
-              {reposState === 'done' && repos.length === 0 && (
-                <p className="text-ch-muted text-sm">No results found.</p>
-              )}
-              {repos.length > 0 && (
-                <Panel hasBorder radii="lg" padding="none" className="min-h-[320px] lg:flex-1 overflow-hidden lg:min-h-0">
-                  <div className={`w-full h-full transition-opacity duration-200 ${reposState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
-                    <PackedBubbleChart data={repos} onSelect={selectRepo} selectedRepo={selectedRepo} />
-                  </div>
-                </Panel>
-              )}
-            </div>
-
-            {/* ── Right: detail panel ──────────────────────────────────────── */}
-            <div className="lg:flex-1 flex flex-col lg:min-h-0 gap-3">
-              {!selectedRepo ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <p className="text-ch-muted text-sm">Click a bubble to explore activity and {mode === 'issues' ? 'issues' : 'pull requests'}</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-ch-yellow font-mono">{selectedRepo}</span>
-                    <Button
-                      type="secondary"
-                      onClick={() => { setSelectedRepo(null); setPrsState('idle'); setContribState('idle'); setContribData([]) }}
-                    >
-                      ✕
-                    </Button>
-                  </div>
-
-                  {/* Top Contributors */}
-                  <Panel hasBorder radii="lg" padding="sm" className="flex-shrink-0" style={{ height: 200 }}>
-                    <div className="flex flex-col w-full h-full">
-                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                        <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
-                          Top Contributors
-                        </h3>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={excludeBots}
-                            onCheckedChange={() => toggleExcludeBots()}
-                            label="Exclude bots"
-                            dir="end"
-                            orientation="horizontal"
-                          />
-                            <RowsBadge rows={contribReadRows} loading={contribState === 'loading'} />
-                          <SQLButton onClick={() => contribSql && openSQL(contribSql)} visible={!!contribSql} />
-                          <LiveElapsedBadge elapsed={contribElapsed} loading={contribState === 'loading'} indexMode={indexMode} />
-                        </div>
-                      </div>
-                      {contribState === 'loading' && contribData.length === 0 && (
-                        <Spinner label="Loading contributors…" />
-                      )}
-                      {contribState === 'error' && (
-                        <p className="text-red-400 text-xs py-2">Failed to load contributors — check console for details.</p>
-                      )}
-                      {contribData.length > 0 && (
-                        <div className={`flex-1 min-h-0 transition-opacity duration-200 ${contribState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
-                          <ContributorsChart data={contribData} />
-                        </div>
-                      )}
-                    </div>
-                  </Panel>
-
-                  {/* Issues */}
-                  <Panel hasBorder radii="lg" padding="sm" className="min-h-[240px] lg:flex-1 lg:min-h-0">
-                    <div className="flex flex-col w-full h-full">
-                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                        <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
-                          {mode === 'issues' ? 'Top Issues' : 'Top Pull Requests'}
-                        </h3>
-                        <div className="flex items-center gap-2">
-                          <RowsBadge rows={prsReadRows} loading={prsState === 'loading'} />
-                          <SQLButton onClick={() => prsSql && openSQL(prsSql)} visible={!!prsSql} />
-                          <LiveElapsedBadge elapsed={prsElapsed} loading={prsState === 'loading'} indexMode={indexMode} />
-                        </div>
-                      </div>
-                      {prsState === 'loading' && prs.length === 0 && <Spinner label="Loading issues…" />}
-                      {prsState === 'error' && (
-                        <p className="text-red-400 text-xs py-2">Failed to load issues — check console for details.</p>
-                      )}
-                      {prs.length > 0 && (
-                        <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${prsState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
-                          <PRList prs={prs} repo={selectedRepo!} mode={mode} />
-                        </div>
-                      )}
-                    </div>
-                  </Panel>
-                </>
-              )}
-            </div>
-          </>
         )}
+
+        <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:min-h-0">
+          {!atd || atd.reposState === 'idle' ? (
+            /* Empty hero */
+            <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 py-16 opacity-60">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <rect width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="10" width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="20" width="7" height="34" rx="3.5" fill="#FAFF69" />
+                <rect x="30" width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="40" width="7" height="26" rx="3.5" fill="#FAFF69" />
+              </svg>
+              <p className="text-ch-muted text-sm max-w-sm">
+                Full-text search across <span className="text-white font-mono">10B+</span> GitHub
+                events powered by ClickHouse.
+                <br /><br />
+                Toggle between Full-Text Search, Bloom filter or Full scan to compare performances.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* ── Left: bubble chart ───────────────────────────────────────── */}
+              <Panel hasBorder radii="lg" padding="sm" className="lg:flex-1 min-h-[240px] lg:min-h-0 overflow-hidden">
+                <div className="flex flex-col w-full h-full">
+                  <div className="flex items-center justify-between mb-2 flex-shrink-0 gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h2 className="text-xs font-semibold uppercase tracking-wider text-white flex-shrink-0">
+                        Top Repos
+                      </h2>
+                      {atd.selectedRepo ? (
+                        <>
+                          <span className="text-ch-muted text-xs flex-shrink-0">→</span>
+                          <span className="text-xs font-semibold text-ch-yellow font-mono truncate">{atd.selectedRepo}</span>
+                          <button
+                            className="flex-shrink-0 text-ch-muted hover:text-white transition-colors text-xs leading-none"
+                            onClick={() => updateTerm(activeTerm, {
+                              selectedRepo: null, repoContext: null,
+                              issuesState: 'idle', issuesData: [],
+                              prsState: 'idle', prsData: [],
+                              contribState: 'idle', contribData: [],
+                            })}
+                          >✕</button>
+                        </>
+                      ) : (
+                        <span className="text-ch-muted font-normal normal-case tracking-normal text-xs">
+                          · {DATE_RANGES.find((r) => r.value === since)?.label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <SQLButton onClick={() => atd.reposSql && openSQL(atd.reposSql)} visible={!!atd.reposSql} />
+                      <RowsBadge rows={atd.reposReadRows} loading={atd.reposState === 'loading'} />
+                      <LiveElapsedBadge elapsed={atd.reposElapsed} loading={atd.reposState === 'loading'} indexMode={indexMode} />
+                    </div>
+                  </div>
+
+                  {atd.reposState === 'loading' && atd.repos.length === 0 && (
+                    <div className="flex-1 flex items-center justify-center">
+                      <Spinner label="Scanning GitHub events…" />
+                    </div>
+                  )}
+                  {atd.reposState === 'error' && <p className="text-red-400 text-sm">{atd.reposError}</p>}
+                  {atd.reposState === 'done' && atd.repos.length === 0 && (
+                    <p className="text-ch-muted text-sm">No results found.</p>
+                  )}
+                  {atd.repos.length > 0 && (
+                    <div className={`flex-1 min-h-0 transition-opacity duration-200 ${atd.reposState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                      <PackedBubbleChart
+                        data={atd.repos}
+                        onSelect={(name) => selectRepo(activeTerm, name)}
+                        selectedRepo={atd.selectedRepo}
+                      />
+                    </div>
+                  )}
+                </div>
+              </Panel>
+
+              {/* ── Right: detail panel ──────────────────────────────────────── */}
+              <div className="lg:flex-1 flex flex-col lg:min-h-0 gap-3">
+                {!atd.selectedRepo ? (
+                  <div className="flex-1 flex items-center justify-center">
+                    <p className="text-ch-muted text-sm">Click a bubble to explore contributors and issues / pull requests</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Top Contributors */}
+                    <Panel hasBorder radii="lg" padding="sm" className="flex-shrink-0" style={{ height: 'clamp(140px, 18vh, 200px)' }}>
+                      <div className="flex flex-col w-full h-full">
+                        <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                          <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
+                            Top Contributors
+                          </h3>
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={excludeBots}
+                              onCheckedChange={() => toggleExcludeBots()}
+                              label="Exclude bots"
+                              dir="end"
+                              orientation="horizontal"
+                            />
+                            <RowsBadge rows={atd.contribReadRows} loading={atd.contribState === 'loading'} />
+                            <SQLButton onClick={() => atd.contribSql && openSQL(atd.contribSql)} visible={!!atd.contribSql} />
+                            <LiveElapsedBadge elapsed={atd.contribElapsed} loading={atd.contribState === 'loading'} indexMode={indexMode} />
+                          </div>
+                        </div>
+                        {atd.contribState === 'loading' && atd.contribData.length === 0 && (
+                          <Spinner label="Loading contributors…" />
+                        )}
+                        {atd.contribState === 'error' && (
+                          <p className="text-red-400 text-xs py-2">Failed to load contributors — check console for details.</p>
+                        )}
+                        {atd.contribData.length > 0 && (
+                          <div className={`flex-1 min-h-0 transition-opacity duration-200 ${atd.contribState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                            <ContributorsChart data={atd.contribData} />
+                          </div>
+                        )}
+                      </div>
+                    </Panel>
+
+                    {/* Issues / PRs panel */}
+                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[240px] lg:flex-1 lg:min-h-0">
+                      <div className="flex flex-col w-full h-full">
+                        <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                          <div className="flex gap-1">
+                            {(['issues', 'prs'] as const).map(tab => (
+                              <button
+                                key={tab}
+                                onClick={() => updateTerm(activeTerm, { detailTab: tab })}
+                                className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                                  atd.detailTab === tab
+                                    ? 'bg-ch-yellow text-black font-semibold'
+                                    : 'bg-ch-gray text-ch-muted hover:text-white border border-ch-border'
+                                }`}
+                              >
+                                {tab === 'issues' ? 'Top Issues' : 'Top PRs'}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {atd.detailTab === 'issues' ? (
+                              <>
+                                <RowsBadge rows={atd.issuesReadRows} loading={atd.issuesState === 'loading'} />
+                                <SQLButton onClick={() => atd.issuesSql && openSQL(atd.issuesSql)} visible={!!atd.issuesSql} />
+                                <LiveElapsedBadge elapsed={atd.issuesElapsed} loading={atd.issuesState === 'loading'} indexMode={indexMode} />
+                              </>
+                            ) : (
+                              <>
+                                <RowsBadge rows={atd.prsReadRows} loading={atd.prsState === 'loading'} />
+                                <SQLButton onClick={() => atd.prsSql && openSQL(atd.prsSql)} visible={!!atd.prsSql} />
+                                <LiveElapsedBadge elapsed={atd.prsElapsed} loading={atd.prsState === 'loading'} indexMode={indexMode} />
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {atd.detailTab === 'issues' ? (
+                          <>
+                            {atd.issuesState === 'loading' && atd.issuesData.length === 0 && <Spinner label="Loading issues…" />}
+                            {atd.issuesState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load issues.</p>}
+                            {atd.issuesData.length > 0 && (
+                              <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.issuesState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                                <PRList prs={atd.issuesData} repo={atd.selectedRepo!} mode="issues" />
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {atd.prsState === 'loading' && atd.prsData.length === 0 && <Spinner label="Loading pull requests…" />}
+                            {atd.prsState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load pull requests.</p>}
+                            {atd.prsData.length > 0 && (
+                              <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.prsState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                                <PRList prs={atd.prsData} repo={atd.selectedRepo!} mode="prs" />
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </Panel>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -611,7 +759,6 @@ function SQLButton({ onClick, visible }: { onClick: () => void; visible: boolean
     </span>
   )
 }
-
 
 function Spinner({ label }: { label: string }) {
   return (
