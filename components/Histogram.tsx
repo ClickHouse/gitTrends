@@ -111,6 +111,13 @@ export default function Histogram({ series, granularity }: HistogramProps) {
     }
   }, [series, granularity])
 
+  const hasData = series.some((s) => s.data.length > 0)
+  if (!hasData) return (
+    <div className="w-full h-full flex items-center justify-center">
+      <span className="text-sm" style={{ color: '#555' }}>No data for this period</span>
+    </div>
+  )
+
   return (
     <ReactECharts
       option={option}

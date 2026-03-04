@@ -108,6 +108,12 @@ export default function ContributorsChart({ data }: ContributorsChartProps) {
     },
   }), [])
 
+  if (data.length === 0) return (
+    <div className="w-full h-full flex items-center justify-center">
+      <span className="text-sm" style={{ color: '#555' }}>No contributors found</span>
+    </div>
+  )
+
   return (
     <ReactECharts
       option={option}

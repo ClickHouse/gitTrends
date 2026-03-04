@@ -690,6 +690,9 @@ export default function Home() {
                         {atd.contribState === 'error' && (
                           <p className="text-red-400 text-xs py-2">Failed to load contributors — check console for details.</p>
                         )}
+                        {atd.contribState === 'done' && atd.contribData.length === 0 && (
+                          <p className="text-ch-muted text-sm py-4 text-center">No contributors found for this term.</p>
+                        )}
                         {atd.contribData.length > 0 && (
                           <div className={`flex-1 min-h-0 transition-opacity duration-200 ${atd.contribState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
                             <ContributorsChart data={atd.contribData} />
@@ -738,6 +741,7 @@ export default function Home() {
                           <>
                             {atd.issuesState === 'loading' && atd.issuesData.length === 0 && <Spinner label="Loading issues…" />}
                             {atd.issuesState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load issues.</p>}
+                            {atd.issuesState === 'done' && atd.issuesData.length === 0 && <p className="text-ch-muted text-sm py-4 text-center">No issues found for this term.</p>}
                             {atd.issuesData.length > 0 && (
                               <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.issuesState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
                                 <PRList prs={atd.issuesData} repo={atd.selectedRepo!} mode="issues" />
@@ -748,6 +752,7 @@ export default function Home() {
                           <>
                             {atd.prsState === 'loading' && atd.prsData.length === 0 && <Spinner label="Loading pull requests…" />}
                             {atd.prsState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load pull requests.</p>}
+                            {atd.prsState === 'done' && atd.prsData.length === 0 && <p className="text-ch-muted text-sm py-4 text-center">No pull requests found for this term.</p>}
                             {atd.prsData.length > 0 && (
                               <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.prsState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
                                 <PRList prs={atd.prsData} repo={atd.selectedRepo!} mode="prs" />

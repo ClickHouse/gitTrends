@@ -3,10 +3,11 @@
 
 export type IndexMode = 'fts' | 'bloom' | 'full_scan'
 
-const CH_URL  = 'https://sql-clickhouse.clickhouse.com'
-const CH_USER = 'demo'
-export const CH_DB    = 'github'
-export const CH_TABLE = 'github_events'
+const CH_URL      = process.env.NEXT_PUBLIC_CLICKHOUSE_URL      ?? 'https://sql-clickhouse.clickhouse.com'
+const CH_USER     = process.env.NEXT_PUBLIC_CLICKHOUSE_USER     ?? 'demo'
+const CH_PASSWORD = process.env.NEXT_PUBLIC_CLICKHOUSE_PASSWORD ?? ''
+export const CH_DB    = process.env.NEXT_PUBLIC_CLICKHOUSE_DB    ?? 'github'
+export const CH_TABLE = process.env.NEXT_PUBLIC_CLICKHOUSE_TABLE ?? 'github_events'
 
 // ── Query utilities (pure, no Node.js deps) ──────────────────────────────────
 
@@ -103,7 +104,7 @@ export async function chStream<T>(
   const sql = toDisplaySql(query, params, mode)
   const settings = indexSettings(mode)
 
-  const urlParams = new URLSearchParams({ user: CH_USER, password: '', database: CH_DB, ...settings })
+  const urlParams = new URLSearchParams({ user: CH_USER, password: CH_PASSWORD, database: CH_DB, ...settings })
   for (const [key, value] of Object.entries(params)) {
     urlParams.set(`param_${key}`, String(value))
   }
