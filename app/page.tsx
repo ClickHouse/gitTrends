@@ -3,12 +3,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import PRList from '@/components/PRList'
-import { Button, ButtonGroup, SearchField, Panel, Badge, Switch } from '@clickhouse/click-ui'
+import { Button, ButtonGroup, Panel, Badge, Switch } from '@clickhouse/click-ui'
 import { chStream, fmtRows, type IndexMode } from '@/lib/ch-stream'
 import { buildReposQuery, buildHistogramQuery, buildContributorsQuery, buildPrsQuery } from '@/lib/queries'
+import { SERIES_COLORS, type HistSeries } from '@/components/Histogram'
 
 const PackedBubbleChart  = dynamic(() => import('@/components/PackedBubbleChart'),  { ssr: false })
-const HeatMap            = dynamic(() => import('@/components/HeatMap'),            { ssr: false })
 const Histogram          = dynamic(() => import('@/components/Histogram'),          { ssr: false })
 const ContributorsChart  = dynamic(() => import('@/components/ContributorsChart'),  { ssr: false })
 
@@ -22,7 +22,6 @@ const DATE_RANGES = [
 ]
 
 interface RepoRow        { repo_name: string; repo_id: string; mentions: string }
-interface HeatRow        { day_of_week: number; hour: number; cnt: string }
 interface ContributorRow { actor_login: string; issues: string; prs: string; comments: string; total: string }
 interface Issue {
   number: number; title: string; actor_login: string; created_at: string
@@ -69,9 +68,45 @@ export default function Home() {
   const [histReadRows,    setHistReadRows]    = useState(0)
   const [histGranularity, setHistGranularity] = useState('toStartOfDay')
 
+  const [compareTerms,   setCompareTerms]   = useState<string[]>([])
+  const [compareInput,   setCompareInput]   = useState('')
+  const [compareData,    setCompareData]    = useState<Record<string, { bucket: string; count: string }[]>>({})
+  const [compareLoading, setCompareLoading] = useState<Record<string, boolean>>({})
+  const compareTermsRef = useRef<string[]>([])
+
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
     window.open(`https://sql.clickhouse.com/?query=${encodeURIComponent(encoded)}`, '_blank')
+  }, [])
+
+  // Fetch histogram for a single compare term (all settings passed as params to avoid stale closures)
+  const fetchCompareHist = useCallback(async (
+    ct: string, currentOp: string, currentIndexMode: IndexMode, currentSince: string, currentMode: string
+  ) => {
+    setCompareLoading((prev) => ({ ...prev, [ct]: true }))
+    try {
+      const q = buildHistogramQuery(ct, currentOp, currentIndexMode, currentSince, currentMode)
+      const { rows } = await chStream<{ bucket: string; count: string }>(q.sql, q.params, currentIndexMode, () => {})
+      setCompareData((prev) => ({ ...prev, [ct]: rows }))
+    } catch { /* ignore */ }
+    setCompareLoading((prev) => ({ ...prev, [ct]: false }))
+  }, [])
+
+  const addCompareTerm = useCallback((ct: string) => {
+    const t = ct.trim()
+    if (!t || compareTermsRef.current.includes(t) || compareTermsRef.current.length >= 4) return
+    const next = [...compareTermsRef.current, t]
+    compareTermsRef.current = next
+    setCompareTerms(next)
+    setCompareInput('')
+    fetchCompareHist(t, op, indexMode, since, mode)
+  }, [op, indexMode, since, mode, fetchCompareHist])
+
+  const removeCompareTerm = useCallback((ct: string) => {
+    const next = compareTermsRef.current.filter((x) => x !== ct)
+    compareTermsRef.current = next
+    setCompareTerms(next)
+    setCompareData((prev) => { const d = { ...prev }; delete d[ct]; return d })
   }, [])
 
   const abortRef      = useRef<AbortController | null>(null)
@@ -119,8 +154,12 @@ export default function Home() {
           setHistGranularity(histQ.granularity); setHistState('done')
         })
         .catch((e) => { if (!isAbort(e)) setHistState('error') })
+
+      for (const ct of compareTermsRef.current) {
+        fetchCompareHist(ct, op, indexMode, since, mode)
+      }
     },
-    [indexMode, since, mode, op]
+    [indexMode, since, mode, op, fetchCompareHist]
   )
 
   const fetchContributors = useCallback(async (
@@ -149,8 +188,7 @@ export default function Home() {
     (repoName: string) => {
       if (!term.trim()) return
       const repoId = repos.find((r) => r.repo_name === repoName)?.repo_id
-      console.log('selectRepo:', repoName, '→ repo_id =', JSON.stringify(repoId))
-      if (!repoId) { console.warn('selectRepo: no repo_id for', repoName, repos); return }
+      if (!repoId) return
 
       const ctx = { term: term.trim(), repoId, op, indexMode, since, mode }
       repoContextRef.current = ctx
@@ -206,10 +244,6 @@ export default function Home() {
     setContribReadRows(0)
   }, [])
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') search(term)
-  }
-
   useEffect(() => {
     if (repos.length > 0 || reposState === 'loading') search(term)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,23 +292,22 @@ export default function Home() {
             Search 10B+ GitHub events by technology, topic, or keyword
           </p>
 
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <SearchField
-                value={term}
-                onChange={(value) => setTerm(value)}
-                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') search(term) }}
-                placeholder="clickhouse, iceberg, vector..."
-              />
-            </div>
-            <Button
-              type="primary"
-              onClick={() => search(term)}
-              disabled={reposState === 'loading'}
-              loading={reposState === 'loading'}
-              label={reposState === 'loading' ? 'Searching…' : 'Search'}
+          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); search(term) }}>
+            <input
+              className="flex-1 bg-ch-gray border border-ch-border rounded-lg px-4 py-2 text-sm text-white placeholder-ch-muted outline-none focus:border-ch-yellow transition-colors"
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              placeholder="clickhouse, iceberg, vector..."
+              autoFocus
             />
-          </div>
+            <button
+              type="submit"
+              disabled={reposState === 'loading'}
+              className="px-4 py-2 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
+            >
+              {reposState === 'loading' ? 'Searching…' : 'Search'}
+            </button>
+          </form>
 
           <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
             <div className="flex items-center gap-2 flex-wrap">
@@ -322,7 +355,7 @@ export default function Home() {
 
       {/* ─── Histogram ───────────────────────────────────────────────────── */}
       {histState !== 'idle' && (
-        <div className="px-6 pb-3 flex-shrink-0" style={{ height: 180 }}>
+        <div className="px-6 pb-3 flex-shrink-0" style={{ height: 210 }}>
           <Panel hasBorder radii="lg" padding="sm" className="h-full">
             <div className="flex flex-col w-full h-full">
               <div className="flex items-center justify-between flex-shrink-0 mb-1">
@@ -333,15 +366,47 @@ export default function Home() {
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
-                  {histSql     && <SQLButton onClick={() => openSQL(histSql)} />}
+                  <SQLButton onClick={() => histSql && openSQL(histSql)} visible={!!histSql && histState !== 'loading'} />
                   <RowsBadge rows={histReadRows} loading={histState === 'loading'} />
-                  {histElapsed && <ElapsedBadge elapsed={histElapsed} indexMode={indexMode} />}
+                  <LiveElapsedBadge elapsed={histElapsed} loading={histState === 'loading'} indexMode={indexMode} />
                 </div>
               </div>
+
+              {/* Compare term chips + add input */}
+              <div className="flex items-center gap-1.5 flex-wrap flex-shrink-0 mb-1 min-h-[24px]">
+                {compareTerms.map((ct, i) => (
+                  <span
+                    key={ct}
+                    className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
+                    style={{ borderColor: SERIES_COLORS[i + 1], color: SERIES_COLORS[i + 1] }}
+                  >
+                    {compareLoading[ct] && <span className="w-1.5 h-1.5 rounded-full animate-pulse flex-shrink-0" style={{ background: SERIES_COLORS[i + 1] }} />}
+                    {ct}
+                    <button onClick={() => removeCompareTerm(ct)} className="opacity-50 hover:opacity-100 leading-none ml-0.5">×</button>
+                  </span>
+                ))}
+                {compareTerms.length < 4 && (
+                  <form onSubmit={(e) => { e.preventDefault(); addCompareTerm(compareInput) }}>
+                    <input
+                      value={compareInput}
+                      onChange={(e) => setCompareInput(e.target.value)}
+                      placeholder="+ compare term"
+                      className="text-xs bg-ch-dark border border-dashed border-[#555] hover:border-[#888] focus:border-ch-yellow rounded px-2 py-0.5 outline-none text-white/60 placeholder-[#666] focus:text-white w-28 transition-colors"
+                    />
+                  </form>
+                )}
+              </div>
+
               {histState === 'loading' && histData.length === 0 && <Spinner label="Loading…" />}
               {histData.length > 0 && (
                 <div className={`flex-1 min-h-0 transition-opacity duration-200 ${histState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
-                  <Histogram data={histData} granularity={histGranularity} />
+                  <Histogram
+                    series={[
+                      { term, data: histData },
+                      ...compareTerms.map((ct) => ({ term: ct, data: compareData[ct] ?? [] })),
+                    ] satisfies HistSeries[]}
+                    granularity={histGranularity}
+                  />
                 </div>
               )}
             </div>
@@ -381,20 +446,26 @@ export default function Home() {
                   </span>
                 </h2>
                 <div className="flex items-center gap-2">
-                  {reposSql && <SQLButton onClick={() => openSQL(reposSql)} />}
+                  <SQLButton onClick={() => reposSql && openSQL(reposSql)} visible={!!reposSql} />
                   <RowsBadge rows={reposReadRows} loading={reposState === 'loading'} />
-                  {reposElapsed && <ElapsedBadge elapsed={reposElapsed} indexMode={indexMode} />}
+                  <LiveElapsedBadge elapsed={reposElapsed} loading={reposState === 'loading'} indexMode={indexMode} />
                 </div>
               </div>
 
-              {reposState === 'loading' && <Spinner label="Scanning GitHub events…" />}
+              {reposState === 'loading' && repos.length === 0 && (
+                <div className="flex-1 flex items-center justify-center">
+                  <Spinner label="Scanning GitHub events…" />
+                </div>
+              )}
               {reposState === 'error'   && <p className="text-red-400 text-sm">{reposError}</p>}
               {reposState === 'done' && repos.length === 0 && (
                 <p className="text-ch-muted text-sm">No results found.</p>
               )}
-              {reposState === 'done' && repos.length > 0 && (
+              {repos.length > 0 && (
                 <Panel hasBorder radii="lg" padding="none" className="min-h-[320px] lg:flex-1 overflow-hidden lg:min-h-0">
-                  <PackedBubbleChart data={repos} onSelect={selectRepo} selectedRepo={selectedRepo} />
+                  <div className={`w-full h-full transition-opacity duration-200 ${reposState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                    <PackedBubbleChart data={repos} onSelect={selectRepo} selectedRepo={selectedRepo} />
+                  </div>
                 </Panel>
               )}
             </div>
@@ -417,30 +488,6 @@ export default function Home() {
                     </Button>
                   </div>
 
-                  {/* Heatmap — temporarily disabled
-                  <div className="border border-ch-border rounded-xl bg-ch-gray p-4 flex flex-col flex-shrink-0" style={{ height: 200 }}>
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
-                        Activity by day &amp; hour (UTC)
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        {heatmapState === 'done' && heatmapSql && (
-                          <SQLButton onClick={() => openSQL(heatmapSql)} />
-                        )}
-                        {heatmapState === 'done' && heatmapElapsed && (
-                          <ElapsedBadge elapsed={heatmapElapsed} indexMode={indexMode} />
-                        )}
-                      </div>
-                    </div>
-                    {heatmapState === 'loading' && <Spinner label="Loading heatmap…" />}
-                    {heatmapState === 'done' && (
-                      <div className="flex-1 min-h-0">
-                        <HeatMap data={heatmapData} />
-                      </div>
-                    )}
-                  </div>
-                  */}
-
                   {/* Top Contributors */}
                   <Panel hasBorder radii="lg" padding="sm" className="flex-shrink-0" style={{ height: 200 }}>
                     <div className="flex flex-col w-full h-full">
@@ -457,8 +504,8 @@ export default function Home() {
                             orientation="horizontal"
                           />
                             <RowsBadge rows={contribReadRows} loading={contribState === 'loading'} />
-                          {contribSql && <SQLButton onClick={() => openSQL(contribSql)} />}
-                          {contribElapsed && <ElapsedBadge elapsed={contribElapsed} indexMode={indexMode} />}
+                          <SQLButton onClick={() => contribSql && openSQL(contribSql)} visible={!!contribSql} />
+                          <LiveElapsedBadge elapsed={contribElapsed} loading={contribState === 'loading'} indexMode={indexMode} />
                         </div>
                       </div>
                       {contribState === 'loading' && contribData.length === 0 && (
@@ -484,8 +531,8 @@ export default function Home() {
                         </h3>
                         <div className="flex items-center gap-2">
                           <RowsBadge rows={prsReadRows} loading={prsState === 'loading'} />
-                          {prsSql && <SQLButton onClick={() => openSQL(prsSql)} />}
-                          {prsElapsed && <ElapsedBadge elapsed={prsElapsed} indexMode={indexMode} />}
+                          <SQLButton onClick={() => prsSql && openSQL(prsSql)} visible={!!prsSql} />
+                          <LiveElapsedBadge elapsed={prsElapsed} loading={prsState === 'loading'} indexMode={indexMode} />
                         </div>
                       </div>
                       {prsState === 'loading' && prs.length === 0 && <Spinner label="Loading issues…" />}
@@ -523,11 +570,13 @@ function CHLogo() {
   )
 }
 
-function SQLButton({ onClick }: { onClick: () => void }) {
+function SQLButton({ onClick, visible }: { onClick: () => void; visible: boolean }) {
   return (
-    <Button type="secondary" onClick={onClick}>
-      {'<'}/{'>'}  SQL
-    </Button>
+    <span className={visible ? '' : 'invisible'}>
+      <Button type="secondary" onClick={onClick}>
+        {'<'}/{'>'}  SQL
+      </Button>
+    </span>
   )
 }
 
@@ -541,19 +590,32 @@ function Spinner({ label }: { label: string }) {
   )
 }
 
-function ElapsedBadge({ elapsed, indexMode }: { elapsed: string; indexMode: string }) {
+function LiveElapsedBadge({ elapsed, loading, indexMode }: { elapsed: string | null; loading: boolean; indexMode: string }) {
+  const [live, setLive] = useState('0.00')
+  const startRef = useRef(0)
+
+  useEffect(() => {
+    if (!loading) return
+    startRef.current = performance.now()
+    setLive('0.00')
+    const id = setInterval(() => {
+      setLive(((performance.now() - startRef.current) / 1000).toFixed(2))
+    }, 100)
+    return () => clearInterval(id)
+  }, [loading])
+
+  if (!loading && !elapsed) return null
   const icon  = indexMode === 'fts' ? '⚡' : indexMode === 'bloom' ? '🔍' : '🐢'
   const state = indexMode === 'full_scan' ? 'danger' : 'success'
-  return (
-    <Badge text={`${elapsed}s ${icon}`} state={state} size="sm" />
-  )
+  return <Badge text={`${loading ? live : elapsed}s ${icon}`} state={state} size="sm" />
 }
 
 function RowsBadge({ rows, loading }: { rows: number; loading: boolean }) {
   if (rows === 0) return null
   return (
-    <span className={`text-xs font-mono text-ch-muted tabular-nums ${loading ? 'animate-pulse' : ''}`}>
-      {fmtRows(rows)} rows
-    </span>
+    <div className={`flex flex-col items-center text-xs font-mono text-ch-muted tabular-nums leading-tight w-[88px] ${loading ? 'animate-pulse' : ''}`}>
+      <span>{fmtRows(rows)}</span>
+      <span>rows scanned</span>
+    </div>
   )
 }
