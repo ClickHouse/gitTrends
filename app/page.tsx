@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import PRList from '@/components/PRList'
 import { Button, ButtonGroup, Panel, Badge, Switch } from '@clickhouse/click-ui'
 import { chStream, fmtRows, type IndexMode } from '@/lib/ch-stream'
-import { buildReposQuery, buildHistogramQuery, buildContributorsQuery, buildPrsQuery } from '@/lib/queries'
+import { buildReposQuery, buildHistogramQuery, buildContributorsQuery, buildPrsQuery, buildRepoSuggestionsQuery } from '@/lib/queries'
 import { SERIES_COLORS, type HistSeries } from '@/components/Histogram'
 
 const PackedBubbleChart  = dynamic(() => import('@/components/PackedBubbleChart'),  { ssr: false })
@@ -74,6 +74,11 @@ export default function Home() {
   const [compareLoading, setCompareLoading] = useState<Record<string, boolean>>({})
   const compareTermsRef = useRef<string[]>([])
 
+  const [repoFilter,             setRepoFilter]             = useState<string[]>([])
+  const [repoFilterInput,        setRepoFilterInput]        = useState('')
+  const [repoSuggestions,        setRepoSuggestions]        = useState<string[]>([])
+  const [repoSuggestionsLoading, setRepoSuggestionsLoading] = useState(false)
+
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
     window.open(`https://sql.clickhouse.com/?query=${encodeURIComponent(encoded)}`, '_blank')
@@ -81,11 +86,11 @@ export default function Home() {
 
   // Fetch histogram for a single compare term (all settings passed as params to avoid stale closures)
   const fetchCompareHist = useCallback(async (
-    ct: string, currentOp: string, currentIndexMode: IndexMode, currentSince: string, currentMode: string
+    ct: string, currentOp: string, currentIndexMode: IndexMode, currentSince: string, currentMode: string, currentRepoFilter: string[]
   ) => {
     setCompareLoading((prev) => ({ ...prev, [ct]: true }))
     try {
-      const q = buildHistogramQuery(ct, currentOp, currentIndexMode, currentSince, currentMode)
+      const q = buildHistogramQuery(ct, currentOp, currentIndexMode, currentSince, currentMode, currentRepoFilter)
       const { rows } = await chStream<{ bucket: string; count: string }>(q.sql, q.params, currentIndexMode, () => {})
       setCompareData((prev) => ({ ...prev, [ct]: rows }))
     } catch { /* ignore */ }
@@ -99,8 +104,8 @@ export default function Home() {
     compareTermsRef.current = next
     setCompareTerms(next)
     setCompareInput('')
-    fetchCompareHist(t, op, indexMode, since, mode)
-  }, [op, indexMode, since, mode, fetchCompareHist])
+    fetchCompareHist(t, op, indexMode, since, mode, repoFilter)
+  }, [op, indexMode, since, mode, fetchCompareHist, repoFilter])
 
   const removeCompareTerm = useCallback((ct: string) => {
     const next = compareTermsRef.current.filter((x) => x !== ct)
@@ -140,14 +145,14 @@ export default function Home() {
 
       const isAbort = (e: unknown) => (e as Error).name === 'AbortError'
 
-      const reposQ = buildReposQuery(t, op, indexMode, since, mode)
+      const reposQ = buildReposQuery(t, op, indexMode, since, mode, repoFilter)
       chStream<RepoRow>(reposQ.sql, reposQ.params, indexMode, (p) => setReposReadRows(p.readRows), signal)
         .then(({ rows, elapsed, sql }) => {
           setReposSql(sql); setRepos(rows); setReposElapsed(elapsed); setReposState('done')
         })
         .catch((e) => { if (!isAbort(e)) { setReposError(e.message); setReposState('error') } })
 
-      const histQ = buildHistogramQuery(t, op, indexMode, since, mode)
+      const histQ = buildHistogramQuery(t, op, indexMode, since, mode, repoFilter)
       chStream<{ bucket: string; count: string }>(histQ.sql, histQ.params, indexMode, (p) => setHistReadRows(p.readRows), signal)
         .then(({ rows, elapsed, sql }) => {
           setHistSql(sql); setHistData(rows); setHistElapsed(elapsed)
@@ -156,10 +161,10 @@ export default function Home() {
         .catch((e) => { if (!isAbort(e)) setHistState('error') })
 
       for (const ct of compareTermsRef.current) {
-        fetchCompareHist(ct, op, indexMode, since, mode)
+        fetchCompareHist(ct, op, indexMode, since, mode, repoFilter)
       }
     },
-    [indexMode, since, mode, op, fetchCompareHist]
+    [indexMode, since, mode, op, fetchCompareHist, repoFilter]
   )
 
   const fetchContributors = useCallback(async (
@@ -247,7 +252,21 @@ export default function Home() {
   useEffect(() => {
     if (repos.length > 0 || reposState === 'loading') search(term)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indexMode, since, mode, op])
+  }, [indexMode, since, mode, op, repoFilter])
+
+  useEffect(() => {
+    if (repoFilterInput.trim().length < 2) { setRepoSuggestions([]); return }
+    const timer = setTimeout(async () => {
+      setRepoSuggestionsLoading(true)
+      try {
+        const q = buildRepoSuggestionsQuery(repoFilterInput.trim())
+        const { rows } = await chStream<{ repo_name: string }>(q.sql, q.params, 'fts', () => {})
+        setRepoSuggestions(rows.map((r) => r.repo_name).filter((r) => !repoFilter.includes(r)))
+      } catch { /* ignore */ }
+      setRepoSuggestionsLoading(false)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [repoFilterInput, repoFilter])
 
 
   return (
@@ -299,6 +318,19 @@ export default function Home() {
               onChange={(e) => setTerm(e.target.value)}
               placeholder="clickhouse, iceberg, vector..."
               autoFocus
+            />
+            <RepoFilter
+              selected={repoFilter}
+              input={repoFilterInput}
+              onInputChange={setRepoFilterInput}
+              suggestions={
+                repoFilterInput.length >= 2
+                  ? repoSuggestions
+                  : repos.map((r) => r.repo_name).filter((r) => !repoFilter.includes(r)).slice(0, 8)
+              }
+              suggestionsLoading={repoSuggestionsLoading}
+              onAdd={(repo) => setRepoFilter((prev) => prev.includes(repo) ? prev : [...prev, repo])}
+              onRemove={(repo) => setRepoFilter((prev) => prev.filter((r) => r !== repo))}
             />
             <button
               type="submit"
@@ -616,6 +648,89 @@ function RowsBadge({ rows, loading }: { rows: number; loading: boolean }) {
     <div className={`flex flex-col items-center text-xs font-mono text-ch-muted tabular-nums leading-tight w-[88px] ${loading ? 'animate-pulse' : ''}`}>
       <span>{fmtRows(rows)}</span>
       <span>rows scanned</span>
+    </div>
+  )
+}
+
+function RepoFilter({
+  selected, input, onInputChange, suggestions, suggestionsLoading, onAdd, onRemove,
+}: {
+  selected: string[]
+  input: string
+  onInputChange: (v: string) => void
+  suggestions: string[]
+  suggestionsLoading: boolean
+  onAdd: (repo: string) => void
+  onRemove: (repo: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const label = selected.length === 0 ? 'All repos' : `${selected.length} repo${selected.length > 1 ? 's' : ''}`
+
+  return (
+    <div className="relative flex-shrink-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap ${
+          selected.length > 0
+            ? 'border-ch-yellow text-ch-yellow bg-ch-gray'
+            : 'border-ch-border text-ch-muted bg-ch-gray hover:border-[#555]'
+        }`}
+      >
+        {label} <span className="text-[10px] opacity-60">▾</span>
+      </button>
+
+      {open && (
+        <div className="absolute top-full mt-1 left-0 z-50 bg-[#111] border border-ch-border rounded-lg shadow-2xl w-72 p-2">
+          {selected.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-2 pb-2 border-b border-ch-border">
+              {selected.map((r) => (
+                <span key={r} className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-ch-gray border border-ch-yellow text-ch-yellow font-mono">
+                  {r}
+                  <button type="button" onClick={() => onRemove(r)} className="opacity-60 hover:opacity-100 leading-none">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <input
+            autoFocus
+            value={input}
+            onChange={(e) => onInputChange(e.target.value)}
+            placeholder="Search repos…"
+            className="w-full bg-ch-gray border border-ch-border rounded px-3 py-1.5 text-sm text-white placeholder-ch-muted outline-none focus:border-ch-yellow transition-colors"
+          />
+          <div className="mt-1 max-h-48 overflow-y-auto">
+            {suggestionsLoading && <p className="text-xs text-ch-muted px-2 py-2">Searching…</p>}
+            {!suggestionsLoading && suggestions.length === 0 && input.length < 2 && (
+              <p className="text-xs text-ch-muted px-2 py-2">Type to search repos</p>
+            )}
+            {!suggestionsLoading && suggestions.length === 0 && input.length >= 2 && (
+              <p className="text-xs text-ch-muted px-2 py-2">No repos found</p>
+            )}
+            {suggestions.map((repo) => (
+              <button
+                key={repo}
+                type="button"
+                onClick={() => { onAdd(repo); onInputChange('') }}
+                className="w-full text-left px-2 py-1.5 text-xs text-white hover:bg-ch-gray rounded transition-colors font-mono"
+              >
+                {repo}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

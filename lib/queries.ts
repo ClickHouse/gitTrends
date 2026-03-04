@@ -15,11 +15,30 @@ const BUCKET_FN: Record<string, string> = {
   'all': 'toStartOfMonth',
 }
 
+function repoFilterClause(repos: string[]): { condition: string; params: Record<string, string> } {
+  if (repos.length === 0) return { condition: '1=1', params: {} }
+  const condition = `repo_name IN (${repos.map((_, i) => `{rf${i}:String}`).join(', ')})`
+  const params: Record<string, string> = Object.fromEntries(repos.map((r, i) => [`rf${i}`, r]))
+  return { condition, params }
+}
+
+export function buildRepoSuggestionsQuery(q: string) {
+  return {
+    sql: `SELECT repo_name
+FROM ${CH_DB}.top_repos
+WHERE repo_name ILIKE {q:String}
+ORDER BY stars DESC
+LIMIT 8`,
+    params: { q: `%${q}%` },
+  }
+}
+
 export function buildReposQuery(
-  term: string, op: string, mode: IndexMode, since: string, qmode: string
+  term: string, op: string, mode: IndexMode, since: string, qmode: string, repoFilter: string[] = []
 ) {
   const body = bodyCondition(term, op, mode)
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
+  const rf = repoFilterClause(repoFilter)
   const eventFilter = qmode === 'prs'
     ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
     : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
@@ -33,19 +52,21 @@ WHERE
   ${eventFilter}
   AND ${body.condition}
   AND ${dateFilter}
+  AND ${rf.condition}
 GROUP BY repo_name
 ORDER BY mentions DESC
 LIMIT 20`,
-    params: body.params,
+    params: { ...body.params, ...rf.params },
   }
 }
 
 export function buildHistogramQuery(
-  term: string, op: string, mode: IndexMode, since: string, qmode: string
+  term: string, op: string, mode: IndexMode, since: string, qmode: string, repoFilter: string[] = []
 ) {
   const body = bodyCondition(term, op, mode)
   const dateFilter  = SINCE_SQL[since] ?? SINCE_SQL['1M']
   const bucketFn    = BUCKET_FN[since] ?? 'toStartOfMonth'
+  const rf = repoFilterClause(repoFilter)
   const eventFilter = qmode === 'prs'
     ? `event_type IN ('PullRequestEvent', 'PullRequestReviewCommentEvent', 'PullRequestReviewEvent')`
     : `event_type IN ('IssueCommentEvent', 'IssuesEvent')`
@@ -58,9 +79,10 @@ WHERE
   ${eventFilter}
   AND ${body.condition}
   AND ${dateFilter}
+  AND ${rf.condition}
 GROUP BY bucket
 ORDER BY bucket ASC`,
-    params: body.params,
+    params: { ...body.params, ...rf.params },
     granularity: bucketFn,
   }
 }
