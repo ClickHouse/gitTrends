@@ -91,7 +91,7 @@ export default function Home() {
   const [histHeight, setHistHeight] = useState(260)
   const histDragRef = useRef<{ startY: number; startH: number } | null>(null)
   useEffect(() => {
-    setHistHeight(Math.max(160, Math.min(500, Math.round(window.innerHeight * 0.28))))
+    setHistHeight(Math.max(160, Math.round(window.innerHeight * 0.28)))
   }, [])
 
   // Global settings
@@ -267,7 +267,7 @@ export default function Home() {
     const onMove = (ev: MouseEvent) => {
       if (!histDragRef.current) return
       const delta = ev.clientY - histDragRef.current.startY
-      setHistHeight(Math.max(140, Math.min(600, histDragRef.current.startH + delta)))
+      setHistHeight(Math.max(140, Math.min(Math.round(window.innerHeight * 0.82), histDragRef.current.startH + delta)))
     }
     const onUp = () => {
       histDragRef.current = null
@@ -633,7 +633,7 @@ export default function Home() {
                 ) : (
                   <>
                     {/* Top Contributors */}
-                    <Panel hasBorder radii="lg" padding="sm" className="flex-shrink-0" style={{ height: 'clamp(140px, 18vh, 200px)' }}>
+                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[140px] lg:min-h-0" style={{ flex: 2 }}>
                       <div className="flex flex-col w-full h-full">
                         <div className="flex items-center justify-between mb-2 flex-shrink-0">
                           <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
@@ -667,7 +667,7 @@ export default function Home() {
                     </Panel>
 
                     {/* Issues / PRs panel */}
-                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[240px] lg:flex-1 lg:min-h-0">
+                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[200px] lg:min-h-0" style={{ flex: 5 }}>
                       <div className="flex flex-col w-full h-full">
                         <div className="flex items-center justify-between mb-2 flex-shrink-0">
                           <div className="flex gap-1">
