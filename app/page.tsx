@@ -110,6 +110,28 @@ export default function Home() {
   const termsRef = useRef<string[]>([])
   useEffect(() => { termsRef.current = terms }, [terms])
 
+  // Sync terms ↔ URL ?q=term1&q=term2
+  const urlInitDone = useRef(false)
+  useEffect(() => {
+    if (urlInitDone.current) return
+    urlInitDone.current = true
+    const params = new URLSearchParams(window.location.search)
+    const q = params.getAll('q').map(t => t.trim()).filter(Boolean).slice(0, 4)
+    if (q.length > 0) {
+      setTerms(q)
+      for (const t of q) searchTerm(t, op, indexMode, since, repoFilter)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams()
+    for (const t of terms) params.append('q', t)
+    const search = params.toString()
+    const url = search ? `?${search}` : window.location.pathname
+    window.history.replaceState(null, '', url)
+  }, [terms])
+
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
     window.open(`https://sql.clickhouse.com/?query=${encodeURIComponent(encoded)}`, '_blank')
@@ -318,7 +340,7 @@ export default function Home() {
           <a href="/" onClick={(e) => { e.preventDefault(); resetAll() }} className="flex items-center gap-3 cursor-pointer">
             <CHLogo />
             <span className="font-semibold text-lg tracking-tight">
-              Git<span className="text-ch-yellow">Search</span>
+              Git<span className="text-ch-yellow">Trends</span>
             </span>
           </a>
           <span className="text-ch-muted text-sm hidden sm:block">· Full-Text Search Demo</span>
@@ -346,18 +368,36 @@ export default function Home() {
       {/* ─── Search bar ──────────────────────────────────────────────────── */}
       {terms.length === 0 ? (
         /* ── Landing layout ─────────────────────────────────────────────── */
-        <div className="px-6 pt-8 pb-4 flex-shrink-0">
-          <div className="max-w-2xl mx-auto">
-            <p className="text-center text-ch-muted text-sm mb-4">
-              Search 10B+ GitHub events by technology, topic, or keyword
-            </p>
+        <div className="flex-1 flex items-center justify-center px-6 py-12">
+          <div className="w-full max-w-2xl flex flex-col items-center gap-8">
+
+            {/* Icon + description */}
+            <div className="flex flex-col items-center gap-4 text-center">
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+                <rect width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="10" width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="20" width="7" height="34" rx="3.5" fill="#FAFF69" />
+                <rect x="30" width="7" height="48" rx="3.5" fill="#FAFF69" />
+                <rect x="40" width="7" height="26" rx="3.5" fill="#FAFF69" />
+              </svg>
+              <div className="space-y-1.5">
+                
+                <p className="text-white/60 text-sm leading-relaxed max-w-md mx-auto">
+                  Search{' '}
+                  <span className="text-white font-semibold font-mono">10B+</span> GitHub events by technology, topic, or keyword and analyse over time.
+                  
+                </p>
+              </div>
+            </div>
+
+            {/* Search bar */}
             <form
-              className="flex gap-2"
+              className="w-full flex gap-2"
               onSubmit={(e) => { e.preventDefault(); if (termInput.trim()) addTerm(termInput) }}
             >
-              <div className="flex-1 flex flex-wrap items-center gap-1.5 bg-ch-gray border border-ch-border rounded-lg px-3 py-1.5 focus-within:border-ch-yellow transition-colors min-w-0">
+              <div className="flex-1 flex flex-wrap items-center gap-1.5 bg-ch-gray border border-ch-border rounded-lg px-4 h-12 focus-within:border-ch-yellow transition-colors min-w-0">
                 <input
-                  className="flex-1 min-w-[120px] bg-transparent text-sm text-white placeholder-ch-muted outline-none py-0.5"
+                  className="flex-1 min-w-[120px] bg-transparent text-base text-white placeholder-ch-muted outline-none"
                   value={termInput}
                   onChange={(e) => setTermInput(e.target.value)}
                   placeholder="clickhouse, iceberg, vector..."
@@ -376,38 +416,43 @@ export default function Home() {
                 suggestionsLoading={repoSuggestionsLoading}
                 onAdd={(repo) => setRepoFilter((prev) => prev.includes(repo) ? prev : [...prev, repo])}
                 onRemove={(repo) => setRepoFilter((prev) => prev.filter((r) => r !== repo))}
+                tall
               />
               <button
                 type="submit"
                 disabled={!termInput.trim()}
-                className="px-4 py-2 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
+                className="px-5 h-12 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
               >
                 Search
               </button>
             </form>
-            <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <ButtonGroup
-                  options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
-                  selected={since}
-                  onClick={setSince}
-                />
-                <span className="text-ch-border">|</span>
-                <ButtonGroup
-                  options={[
-                    { value: 'all', label: 'AND' },
-                    { value: 'any', label: 'OR'  },
-                  ]}
-                  selected={op}
-                  onClick={(v) => setOp(v as 'any' | 'all')}
-                />
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {SUGGESTIONS.map((s) => (
-                  <Button key={s} type="secondary" onClick={() => addTerm(s)}>{s}</Button>
-                ))}
-              </div>
+
+            {/* Settings */}
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              <ButtonGroup
+                options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+                selected={since}
+                onClick={setSince}
+              />
+              <span className="text-ch-border">|</span>
+              <ButtonGroup
+                options={[
+                  { value: 'all', label: 'AND' },
+                  { value: 'any', label: 'OR'  },
+                ]}
+                selected={op}
+                onClick={(v) => setOp(v as 'any' | 'all')}
+              />
             </div>
+
+            {/* Suggestions */}
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              <span className="text-ch-muted text-xs">Try:</span>
+              {SUGGESTIONS.map((s) => (
+                <Button key={s} type="secondary" onClick={() => addTerm(s)}>{s}</Button>
+              ))}
+            </div>
+
           </div>
         </div>
       ) : (
@@ -439,19 +484,19 @@ export default function Home() {
               onClick={(v) => setOp(v as 'any' | 'all')}
             />
             <span className="text-ch-border">|</span>
-            <div className="flex-1 flex flex-wrap items-center gap-1.5 bg-ch-gray border border-ch-border rounded-lg px-3 py-1.5 focus-within:border-ch-yellow transition-colors min-w-[180px]">
+            <div className="flex-1 flex flex-wrap items-center gap-2 bg-ch-gray border border-ch-border rounded-lg px-3 py-2 focus-within:border-ch-yellow transition-colors min-w-[180px]">
               {terms.map((t, i) => (
                 <span
                   key={t}
-                  className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border flex-shrink-0"
-                  style={{ borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length] }}
+                  className="flex items-center gap-1.5 text-sm px-3 py-1 rounded-full border flex-shrink-0 font-medium"
+                  style={{ borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length], background: SERIES_COLORS[i % SERIES_COLORS.length] + '18' }}
                 >
                   {t}
-                  <button type="button" onClick={() => removeTerm(t)} className="opacity-50 hover:opacity-100 leading-none ml-0.5">×</button>
+                  <button type="button" onClick={() => removeTerm(t)} className="opacity-60 hover:opacity-100 text-base leading-none hover:text-white transition-colors">×</button>
                 </span>
               ))}
               <input
-                className="flex-1 min-w-[100px] bg-transparent text-sm text-white placeholder-ch-muted outline-none py-0.5"
+                className="flex-1 min-w-[100px] bg-transparent text-sm text-white placeholder-ch-muted outline-none"
                 value={termInput}
                 onChange={(e) => setTermInput(e.target.value)}
                 placeholder={terms.length < 4 ? 'Add another term…' : ''}
@@ -528,20 +573,24 @@ export default function Home() {
 
         {/* Term tabs */}
         {terms.length > 1 && (
-          <div className="flex gap-1 mb-3 flex-shrink-0">
+          <div className="flex gap-2 mb-3 flex-shrink-0">
             {terms.map((t, i) => (
               <button
                 key={t}
                 onClick={() => setActiveTermIdx(i)}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors border ${
+                className={`px-4 py-1.5 text-sm rounded-lg transition-all border font-medium ${
                   i === activeTermIdx
-                    ? 'font-semibold'
-                    : 'border-transparent text-ch-muted hover:text-white'
+                    ? 'shadow-sm'
+                    : 'border-ch-border text-ch-muted hover:text-white hover:border-[#555]'
                 }`}
                 style={i === activeTermIdx
-                  ? { borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length], background: SERIES_COLORS[i % SERIES_COLORS.length] + '18' }
+                  ? { borderColor: SERIES_COLORS[i % SERIES_COLORS.length], color: SERIES_COLORS[i % SERIES_COLORS.length], background: SERIES_COLORS[i % SERIES_COLORS.length] + '28' }
                   : {}}
               >
+                <span
+                  className="inline-block w-2 h-2 rounded-full mr-2"
+                  style={{ background: SERIES_COLORS[i % SERIES_COLORS.length], opacity: i === activeTermIdx ? 1 : 0.4 }}
+                />
                 {t}
               </button>
             ))}
@@ -549,24 +598,7 @@ export default function Home() {
         )}
 
         <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:min-h-0">
-          {!atd || atd.reposState === 'idle' ? (
-            /* Empty hero */
-            <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 py-16 opacity-60">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <rect width="7" height="48" rx="3.5" fill="#FAFF69" />
-                <rect x="10" width="7" height="48" rx="3.5" fill="#FAFF69" />
-                <rect x="20" width="7" height="34" rx="3.5" fill="#FAFF69" />
-                <rect x="30" width="7" height="48" rx="3.5" fill="#FAFF69" />
-                <rect x="40" width="7" height="26" rx="3.5" fill="#FAFF69" />
-              </svg>
-              <p className="text-ch-muted text-sm max-w-sm">
-                Full-text search across <span className="text-white font-mono">10B+</span> GitHub
-                events powered by ClickHouse.
-                <br /><br />
-                Toggle between Full-Text Search, Bloom filter or Full scan to compare performances.
-              </p>
-            </div>
-          ) : (
+          {!atd || atd.reposState === 'idle' ? null : (
             <>
               {/* ── Left: bubble chart ───────────────────────────────────────── */}
               <Panel hasBorder radii="lg" padding="sm" className="lg:flex-1 min-h-[240px] lg:min-h-0 overflow-hidden">
@@ -633,7 +665,7 @@ export default function Home() {
                 ) : (
                   <>
                     {/* Top Contributors */}
-                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[140px] lg:min-h-0" style={{ flex: 2 }}>
+                    <Panel hasBorder radii="lg" padding="sm" className="min-h-[140px] lg:min-h-0" style={{ flex: 3 }}>
                       <div className="flex flex-col w-full h-full">
                         <div className="flex items-center justify-between mb-2 flex-shrink-0">
                           <h3 className="text-xs font-semibold uppercase tracking-wider text-white">
@@ -800,7 +832,7 @@ function RowsBadge({ rows, loading }: { rows: number; loading: boolean }) {
 }
 
 function RepoFilter({
-  selected, input, onInputChange, suggestions, suggestionsLoading, onAdd, onRemove,
+  selected, input, onInputChange, suggestions, suggestionsLoading, onAdd, onRemove, tall,
 }: {
   selected: string[]
   input: string
@@ -809,6 +841,7 @@ function RepoFilter({
   suggestionsLoading: boolean
   onAdd: (repo: string) => void
   onRemove: (repo: string) => void
+  tall?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -829,7 +862,7 @@ function RepoFilter({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap ${
+        className={`flex items-center gap-1.5 px-3 ${tall ? 'h-12' : 'py-2'} rounded-lg border text-sm transition-colors whitespace-nowrap ${
           selected.length > 0
             ? 'border-ch-yellow text-ch-yellow bg-ch-gray'
             : 'border-ch-border text-ch-muted bg-ch-gray hover:border-[#555]'

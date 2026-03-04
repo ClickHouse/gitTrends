@@ -6,7 +6,7 @@ import Providers from './providers'
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'block' })
 
 export const metadata: Metadata = {
-  title: 'GitSearch — ClickHouse Full-Text Search Demo',
+  title: 'GitTrends — ClickHouse Full-Text Search Demo',
   description:
     'Explore 10B+ GitHub events using ClickHouse full-text search with inverted indexes.',
 }
