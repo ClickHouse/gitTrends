@@ -110,27 +110,46 @@ export default function Home() {
   const termsRef = useRef<string[]>([])
   useEffect(() => { termsRef.current = terms }, [terms])
 
-  // Sync terms ↔ URL ?q=term1&q=term2
+  // Sync all state ↔ URL
   const urlInitDone = useRef(false)
   useEffect(() => {
     if (urlInitDone.current) return
     urlInitDone.current = true
     const params = new URLSearchParams(window.location.search)
+
     const q = params.getAll('q').map(t => t.trim()).filter(Boolean).slice(0, 4)
+    const sinceParam  = params.get('since')
+    const opParam     = params.get('op')
+    const indexParam  = params.get('index')
+    const repoParams  = params.getAll('repo').filter(Boolean)
+
+    const initSince  = ['1M','3M','1Y','all'].includes(sinceParam ?? '')        ? sinceParam! as string           : since
+    const initOp     = ['all','any'].includes(opParam ?? '')                    ? opParam! as 'all' | 'any'       : op
+    const initIndex  = ['fts','bloom','full_scan'].includes(indexParam ?? '')   ? indexParam! as IndexMode        : indexMode
+    const initRepos  = repoParams
+
+    if (sinceParam)          setSince(initSince)
+    if (opParam)             setOp(initOp)
+    if (indexParam)          setIndexMode(initIndex)
+    if (repoParams.length)   setRepoFilter(initRepos)
+
     if (q.length > 0) {
       setTerms(q)
-      for (const t of q) searchTerm(t, op, indexMode, since, repoFilter)
+      for (const t of q) searchTerm(t, initOp, initIndex, initSince, initRepos)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     const params = new URLSearchParams()
-    for (const t of terms) params.append('q', t)
+    for (const t of terms)     params.append('q', t)
+    if (since !== '1M')        params.set('since', since)
+    if (op !== 'all')          params.set('op', op)
+    if (indexMode !== 'fts')   params.set('index', indexMode)
+    for (const r of repoFilter) params.append('repo', r)
     const search = params.toString()
-    const url = search ? `?${search}` : window.location.pathname
-    window.history.replaceState(null, '', url)
-  }, [terms])
+    window.history.replaceState(null, '', search ? `?${search}` : window.location.pathname)
+  }, [terms, since, op, indexMode, repoFilter])
 
   const openSQL = useCallback((sql: string) => {
     const encoded = btoa(unescape(encodeURIComponent(sql)))
@@ -484,7 +503,7 @@ export default function Home() {
               onClick={(v) => setOp(v as 'any' | 'all')}
             />
             <span className="text-ch-border">|</span>
-            <div className="flex-1 flex flex-wrap items-center gap-2 bg-ch-gray border border-ch-border rounded-lg px-3 py-2 focus-within:border-ch-yellow transition-colors min-w-[180px]">
+            <div className="flex-1 flex flex-wrap items-center gap-2 bg-ch-gray border border-ch-border rounded-lg px-3 min-h-[40px] py-1.5 focus-within:border-ch-yellow transition-colors min-w-[180px]">
               {terms.map((t, i) => (
                 <span
                   key={t}
@@ -517,12 +536,6 @@ export default function Home() {
               onAdd={(repo) => setRepoFilter((prev) => prev.includes(repo) ? prev : [...prev, repo])}
               onRemove={(repo) => setRepoFilter((prev) => prev.filter((r) => r !== repo))}
             />
-            <button
-              type="submit"
-              className="px-4 py-2 bg-ch-yellow text-black text-sm font-semibold rounded-lg disabled:opacity-50 whitespace-nowrap"
-            >
-              {terms.some(t => termData[t]?.reposState === 'loading') ? 'Searching…' : 'Search'}
-            </button>
           </form>
         </div>
       )}
@@ -867,7 +880,7 @@ function RepoFilter({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-3 ${tall ? 'h-12' : 'py-2'} rounded-lg border text-sm transition-colors whitespace-nowrap ${
+        className={`flex items-center gap-1.5 px-3 ${tall ? 'h-12' : 'h-10'} rounded-lg border text-sm transition-colors whitespace-nowrap ${
           selected.length > 0
             ? 'border-ch-yellow text-ch-yellow bg-ch-gray'
             : 'border-ch-border text-ch-muted bg-ch-gray hover:border-[#555]'
