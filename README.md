@@ -1,8 +1,8 @@
-# GitTrends — GitHub Event Search powered by ClickHouse
+# GitTrends — GitHub trends analysis powered by ClickHouse
 
 GitTrends lets you search and compare how any topic, technology, or keyword trends across **10 billion+ GitHub events** — issues, pull requests, and comments — in real time.
 
-It is a live demo of [ClickHouse](https://clickhouse.com) full-text search capabilities, showing the performance difference between an **inverted index (FTS)**, a **token bloom filter**, and a raw **full table scan** on the same dataset.
+It is a demo of [ClickHouse full-text search capabilities](https://clickhouse.com/docs/engines/table-engines/mergetree-family/textindexes), showing the performance difference between an **inverted index (FTS)**, a **token bloom filter**, and a raw **full table scan** on the same dataset.
 
 ---
 
@@ -94,11 +94,11 @@ The defaults in `.env.example` point to the public ClickHouse demo instance, so 
 If you want to run against your own ClickHouse instance, edit `.env.local`:
 
 ```env
-NEXT_PUBLIC_CLICKHOUSE_URL=https://your-clickhouse-host:8443
-NEXT_PUBLIC_CLICKHOUSE_USER=your_readonly_user
+NEXT_PUBLIC_CLICKHOUSE_URL=https://sql-clickhouse.clickhouse.com
+NEXT_PUBLIC_CLICKHOUSE_USER=demo
 NEXT_PUBLIC_CLICKHOUSE_PASSWORD=
-NEXT_PUBLIC_CLICKHOUSE_DB=your_database
-NEXT_PUBLIC_CLICKHOUSE_TABLE=your_table
+NEXT_PUBLIC_CLICKHOUSE_DB=github
+NEXT_PUBLIC_CLICKHOUSE_TABLE=github_events
 ```
 
 > **Note:** `NEXT_PUBLIC_*` variables are embedded in the client-side JavaScript bundle and are visible to anyone who inspects your site. Use a dedicated read-only ClickHouse user with no write permissions.
