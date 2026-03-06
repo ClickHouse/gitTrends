@@ -4,6 +4,8 @@ GitTrends lets you search and compare how any topic, technology, or keyword tren
 
 It is a demo of [ClickHouse full-text search capabilities](https://clickhouse.com/docs/engines/table-engines/mergetree-family/textindexes), showing the performance difference between an **inverted index (FTS)**, a **token bloom filter**, and a raw **full table scan** on the same dataset.
 
+<img width="1919" height="948" alt="CleanShot 2026-03-06 at 10 26 19" src="https://github.com/user-attachments/assets/c55aa3e4-2ca4-4ab7-9701-88112ee8d62e" />
+
 ---
 
 ## Features
