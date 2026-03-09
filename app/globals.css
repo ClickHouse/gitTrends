@@ -34,3 +34,37 @@ body {
 ::selection {
   background: #faff6944;
 }
+
+/* Cookie consent: override SDK inline styles */
+.cc-message-container * {
+  font-size: 14px !important;
+}
+
+.cc-compliance {
+  color: #fff !important;
+  font-weight: normal !important;
+}
+
+.cc-btn {
+  font-size: 14px !important;
+  color: #fff !important;
+  font-weight: normal !important;
+  padding: 15px !important;
+}
+
+.cc-btn.cc-allow, .cc-type-opt-out .cc-btn.cc-dismiss {
+  background-color: rgb(23, 103, 54) !important;
+  color: #fff !important;
+  font-weight: normal !important;
+  font-size: 14px !important;
+  border: none !important;
+}
+
+.cc-btn.cc-allow:hover, .cc-type-opt-out .cc-btn.cc-dismiss:hover {
+  background-color: rgb(15, 67, 35) !important;
+}
+
+#securitiCmpCookiePrefBtn {
+  font-weight: normal !important;
+  font-size: 14px !important;
+}
