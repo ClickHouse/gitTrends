@@ -357,10 +357,7 @@ export default function Home() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-ch-border">
         <div className="flex items-center gap-3">
           <a href="/" onClick={(e) => { e.preventDefault(); resetAll() }} className="flex items-center gap-3 cursor-pointer">
-            <CHLogo />
-            <span className="font-semibold text-lg tracking-tight">
-              Git<span className="text-ch-yellow">Trends</span>
-            </span>
+            <img src="/gittrends.svg" alt="GitTrends" height={28} style={{ height: 28 }} />
           </a>
           <span className="text-ch-muted text-sm hidden sm:block">Full-Text Search Demo powered by ClickHouse.</span>
         </div>
@@ -793,17 +790,6 @@ export default function Home() {
 
 // ── Helper components ─────────────────────────────────────────────────────────
 
-function CHLogo() {
-  return (
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <rect width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="6" width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="12" width="4" height="20" rx="2" fill="#FAFF69" />
-      <rect x="18" width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="24" width="4" height="16" rx="2" fill="#FAFF69" />
-    </svg>
-  )
-}
 
 function SQLButton({ onClick, visible }: { onClick: () => void; visible: boolean }) {
   return (
