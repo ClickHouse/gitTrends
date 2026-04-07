@@ -169,7 +169,7 @@ export default function Home() {
     tryExcludeBots: boolean,
     onFallback?: (newVal: boolean) => void,
   ) => {
-    updateTerm(term, { contribState: 'loading', contribReadRows: 0 })
+    updateTerm(term, { contribData: [], contribState: 'loading', contribReadRows: 0 })
     try {
       const q = buildContributorsQuery(term, ctx.op, ctx.indexMode, ctx.since, ctx.repoId, tryExcludeBots)
       const res = await chStream<ContributorRow>(q.sql, q.params, ctx.indexMode, (p) =>
@@ -357,30 +357,38 @@ export default function Home() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-ch-border">
         <div className="flex items-center gap-3">
           <a href="/" onClick={(e) => { e.preventDefault(); resetAll() }} className="flex items-center gap-3 cursor-pointer">
-            <CHLogo />
-            <span className="font-semibold text-lg tracking-tight">
-              Git<span className="text-ch-yellow">Trends</span>
-            </span>
+            <img src="/gittrends.svg" alt="GitTrends" height={28} style={{ height: 28 }} />
           </a>
-          <span className="text-ch-muted text-sm hidden sm:block">· Full-Text Search Demo</span>
+          <span className="text-ch-muted text-sm hidden sm:block">Full-Text Search Demo powered by ClickHouse.</span>
         </div>
 
-        {/* Index mode toggle */}
-        <div className="flex items-center gap-1">
-          {([
-            { value: 'fts',       label: 'FTS',          title: 'Inverted index: enable_full_text_index=1, query_plan_direct_read_from_text_index=1' },
-            { value: 'bloom',     label: 'Bloom filter',  title: 'Token bloom filter: use_skip_indexes_on_data_read=1, enable_full_text_index=0' },
-            { value: 'full_scan', label: 'Full scan',     title: 'No index: use_skip_indexes_on_data_read=0, enable_full_text_index=0, uses ILIKE' },
-          ] as const).map(({ value, label, title }) => (
-            <Button
-              key={value}
-              onClick={() => setIndexMode(value)}
-              title={title}
-              type={indexMode === value ? (value === 'full_scan' ? 'danger' : 'primary') : 'secondary'}
-            >
-              {label}
-            </Button>
-          ))}
+        {/* Index mode toggle + GitHub link */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            {([
+              { value: 'fts',       label: 'FTS',          title: 'Inverted index: enable_full_text_index=1, query_plan_direct_read_from_text_index=1' },
+              { value: 'bloom',     label: 'Bloom filter',  title: 'Token bloom filter: use_skip_indexes_on_data_read=1, enable_full_text_index=0' },
+              { value: 'full_scan', label: 'Full scan',     title: 'No index: use_skip_indexes_on_data_read=0, enable_full_text_index=0, uses ILIKE' },
+            ] as const).map(({ value, label, title }) => (
+              <Button
+                key={value}
+                onClick={() => setIndexMode(value)}
+                title={title}
+                type={indexMode === value ? (value === 'full_scan' ? 'danger' : 'primary') : 'secondary'}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <a
+            href="https://github.com/ClickHouse/gitTrends"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="opacity-60 hover:opacity-100 transition-opacity"
+            title="View on GitHub"
+          >
+            <img src="/github.svg" alt="GitHub" width={20} height={20} />
+          </a>
         </div>
       </header>
 
@@ -476,9 +484,24 @@ export default function Home() {
         </div>
       ) : (
         /* ── Compact layout when search is active ───────────────────────── */
-        <div className="px-6 py-3 flex-shrink-0">
+        <div className="px-6 py-3 flex-shrink-0 flex items-center gap-2 flex-wrap">
+          <ButtonGroup
+            options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+            selected={since}
+            onClick={setSince}
+          />
+          <span className="text-ch-border">|</span>
+          <ButtonGroup
+            options={[
+              { value: 'all', label: 'AND' },
+              { value: 'any', label: 'OR'  },
+            ]}
+            selected={op}
+            onClick={(v) => setOp(v as 'any' | 'all')}
+          />
+          <span className="text-ch-border">|</span>
           <form
-            className="flex items-center gap-2 flex-wrap"
+            className="flex flex-1 items-center gap-2 flex-wrap"
             onSubmit={(e) => {
               e.preventDefault()
               if (termInput.trim()) {
@@ -488,21 +511,6 @@ export default function Home() {
               }
             }}
           >
-            <ButtonGroup
-              options={DATE_RANGES.map((r) => ({ value: r.value, label: r.label }))}
-              selected={since}
-              onClick={setSince}
-            />
-            <span className="text-ch-border">|</span>
-            <ButtonGroup
-              options={[
-                { value: 'all', label: 'AND' },
-                { value: 'any', label: 'OR'  },
-              ]}
-              selected={op}
-              onClick={(v) => setOp(v as 'any' | 'all')}
-            />
-            <span className="text-ch-border">|</span>
             <div className="flex-1 flex flex-wrap items-center gap-2 bg-ch-gray border border-ch-border rounded-lg px-3 min-h-[40px] py-1.5 focus-within:border-ch-yellow transition-colors min-w-[180px]">
               {terms.map((t, i) => (
                 <span
@@ -559,9 +567,9 @@ export default function Home() {
                 </div>
               </div>
 
-              {primaryHist.state === 'loading' && primaryHist.data.length === 0 && <Spinner label="Loading…" />}
+              {primaryHist.state === 'loading' && <Spinner />}
               {terms.some(t => (histByTerm[t]?.data.length ?? 0) > 0) && (
-                <div className={`flex-1 min-h-0 transition-opacity duration-200 ${primaryHist.state === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                <div className="flex-1 min-h-0">
                   <Histogram
                     series={terms.map(t => ({ term: t, data: histByTerm[t]?.data ?? [] })) satisfies HistSeries[]}
                     granularity={histGranularity}
@@ -648,17 +656,13 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {atd.reposState === 'loading' && atd.repos.length === 0 && (
-                    <div className="flex-1 flex items-center justify-center">
-                      <Spinner label="Scanning GitHub events…" />
-                    </div>
-                  )}
+                  {atd.reposState === 'loading' && <Spinner />}
                   {atd.reposState === 'error' && <p className="text-red-400 text-sm">{atd.reposError}</p>}
                   {atd.reposState === 'done' && atd.repos.length === 0 && (
                     <p className="text-ch-muted text-sm">No results found.</p>
                   )}
                   {atd.repos.length > 0 && (
-                    <div className={`flex-1 min-h-0 transition-opacity duration-200 ${atd.reposState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                    <div className="flex-1 min-h-0">
                       <PackedBubbleChart
                         data={atd.repos}
                         onSelect={(name) => selectRepo(activeTerm, name)}
@@ -697,9 +701,7 @@ export default function Home() {
                             <LiveElapsedBadge elapsed={atd.contribElapsed} loading={atd.contribState === 'loading'} indexMode={indexMode} />
                           </div>
                         </div>
-                        {atd.contribState === 'loading' && atd.contribData.length === 0 && (
-                          <Spinner label="Loading contributors…" />
-                        )}
+                        {atd.contribState === 'loading' && <Spinner />}
                         {atd.contribState === 'error' && (
                           <p className="text-red-400 text-xs py-2">Failed to load contributors — check console for details.</p>
                         )}
@@ -707,7 +709,7 @@ export default function Home() {
                           <p className="text-ch-muted text-sm py-4 text-center">No contributors found for this term.</p>
                         )}
                         {atd.contribData.length > 0 && (
-                          <div className={`flex-1 min-h-0 transition-opacity duration-200 ${atd.contribState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                          <div className="flex-1 min-h-0">
                             <ContributorsChart data={atd.contribData} />
                           </div>
                         )}
@@ -752,22 +754,22 @@ export default function Home() {
 
                         {atd.detailTab === 'issues' ? (
                           <>
-                            {atd.issuesState === 'loading' && atd.issuesData.length === 0 && <Spinner label="Loading issues…" />}
+                            {atd.issuesState === 'loading' && <Spinner />}
                             {atd.issuesState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load issues.</p>}
                             {atd.issuesState === 'done' && atd.issuesData.length === 0 && <p className="text-ch-muted text-sm py-4 text-center">No issues found for this term.</p>}
                             {atd.issuesData.length > 0 && (
-                              <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.issuesState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                              <div className="flex-1 lg:overflow-y-auto lg:min-h-0">
                                 <PRList prs={atd.issuesData} repo={atd.selectedRepo!} mode="issues" />
                               </div>
                             )}
                           </>
                         ) : (
                           <>
-                            {atd.prsState === 'loading' && atd.prsData.length === 0 && <Spinner label="Loading pull requests…" />}
+                            {atd.prsState === 'loading' && <Spinner />}
                             {atd.prsState === 'error' && <p className="text-red-400 text-xs py-2">Failed to load pull requests.</p>}
                             {atd.prsState === 'done' && atd.prsData.length === 0 && <p className="text-ch-muted text-sm py-4 text-center">No pull requests found for this term.</p>}
                             {atd.prsData.length > 0 && (
-                              <div className={`flex-1 lg:overflow-y-auto lg:min-h-0 transition-opacity duration-200 ${atd.prsState === 'loading' ? 'opacity-40' : 'opacity-100'}`}>
+                              <div className="flex-1 lg:overflow-y-auto lg:min-h-0">
                                 <PRList prs={atd.prsData} repo={atd.selectedRepo!} mode="prs" />
                               </div>
                             )}
@@ -788,17 +790,6 @@ export default function Home() {
 
 // ── Helper components ─────────────────────────────────────────────────────────
 
-function CHLogo() {
-  return (
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <rect width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="6" width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="12" width="4" height="20" rx="2" fill="#FAFF69" />
-      <rect x="18" width="4" height="28" rx="2" fill="#FAFF69" />
-      <rect x="24" width="4" height="16" rx="2" fill="#FAFF69" />
-    </svg>
-  )
-}
 
 function SQLButton({ onClick, visible }: { onClick: () => void; visible: boolean }) {
   return (
@@ -810,11 +801,11 @@ function SQLButton({ onClick, visible }: { onClick: () => void; visible: boolean
   )
 }
 
-function Spinner({ label }: { label: string }) {
+function Spinner() {
   return (
-    <div className="flex items-center gap-3 py-8">
+    <div className="flex-1 flex items-center justify-center gap-3">
       <div className="w-5 h-5 border-2 border-ch-yellow border-t-transparent rounded-full animate-spin flex-shrink-0" />
-      <span className="text-ch-muted text-sm">{label}</span>
+      <span className="text-ch-muted text-sm">Scanning GitHub events…</span>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import './globals.css'
 import Providers from './providers'
 import { GoogleTagManager } from '@next/third-parties/google'
 
+
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'block' })
 
 export const metadata: Metadata = {
@@ -17,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={inter.variable}>
       <GoogleTagManager gtmId="GTM-T55CC768" />
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <Providers><Analytics>{children}</Analytics></Providers>
       </body>
     </html>
   )

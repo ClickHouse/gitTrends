@@ -48,21 +48,18 @@ export function indexSettings(mode: IndexMode): Record<string, string> {
     enable_parallel_replicas: '1',
     enable_full_text_index: '1',
     use_skip_indexes: '1',
-    use_query_condition_cache: '0',
     query_plan_direct_read_from_text_index: '1',
     use_skip_indexes_on_data_read: '1',
   }
   if (mode === 'bloom') return {
     enable_parallel_replicas: '1',
     enable_full_text_index: '0',
-    use_skip_indexes: '1',
-    use_query_condition_cache: '0',
+    use_skip_indexes: '1'
   }
   return {
     enable_parallel_replicas: '1',
     enable_full_text_index: '0',
-    use_skip_indexes: '0',
-    use_query_condition_cache: '0',
+    use_skip_indexes: '0'
   }
 }
 
