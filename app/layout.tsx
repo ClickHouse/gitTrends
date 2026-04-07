@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import Providers from './providers'
-import Analytics from './analytics'
-import Script from 'next/script';
+import { GoogleTagManager } from '@next/third-parties/google'
+
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'block' })
 
@@ -16,14 +16,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <Script
-        defer
-        data-skip-css="false"
-        src="https://cdn-prod.securiti.ai/consent/cookie-consent-sdk-loader-strict-csp.js"
-        data-tenant-uuid="8555e54b-cd0b-45d7-9c1c-e9e088bf774a"
-        data-domain-uuid="03e5394d-77f1-4eff-8ca4-f893359476e5"
-        data-backend-url="https://app.securiti.ai"
-      />
+      <GoogleTagManager gtmId="GTM-T55CC768" />
       <body className={inter.className}>
         <Providers><Analytics>{children}</Analytics></Providers>
       </body>

@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@clickhouse/click-ui": "^0.0.250",
-    "@hyperdx/browser": "^0.22.0",
-    "@next/third-parties": "^16.1.6",
+    "@next/third-parties": "^16.2.2",
     "d3-hierarchy": "^3.1.2",
     "dayjs": "^1.11.19",
     "echarts": "^5.5.1",
